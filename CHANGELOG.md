@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.6.2 - 2026-05-04
+
+### Fixed
+
+- Fixed a Wails desktop startup collision where an already-running local backend on `127.0.0.1:13370` could make a release build talk to the wrong process and display `dev`.
+- Wails desktop builds now use a relative API base and proxy API calls through the Wails asset server to the backend instance started by the current desktop process.
+- Desktop backend startup now binds the listener before readiness checks, preserving `13370` when available and falling back to a free local port instead of accepting another process as ready.
+
 ## v1.6.1 - 2026-05-04
 
 This release focuses on making Eve Flipper less optimistic on paper and more useful for real execution decisions.

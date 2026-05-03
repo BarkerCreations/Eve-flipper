@@ -8,9 +8,13 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +49,7 @@ type backendRuntime struct {
 	httpServer *http.Server
 	database   *db.DB
 	closeLogs  func()
+	baseURL    string
 	stopOnce   sync.Once
 }
 
@@ -81,7 +86,10 @@ func main() {
 		MinWidth:         900,
 		MinHeight:        600,
 		WindowStartState: options.Maximised,
-		AssetServer:      &assetserver.Options{Assets: wailsFrontendFS},
+		AssetServer: &assetserver.Options{
+			Assets:  wailsFrontendFS,
+			Handler: newBackendProxy(backend.baseURL),
+		},
 		BackgroundColour: &options.RGBA{R: 13, G: 13, B: 13, A: 255},
 		DisableResize:    false,
 		Windows: &windowsopts.Options{
@@ -98,7 +106,7 @@ func main() {
 	}
 }
 
-func startBackend(host string, port int) (*backendRuntime, error) {
+func startBackend(host string, preferredPort int) (*backendRuntime, error) {
 	// File logs live next to the running binary (release/build folder).
 	logDir := "."
 	if exePath, err := os.Executable(); err == nil {
@@ -130,6 +138,7 @@ func startBackend(host string, port int) (*backendRuntime, error) {
 
 	database, err := db.Open()
 	if err != nil {
+		closeLogs()
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
@@ -138,12 +147,31 @@ func startBackend(host string, port int) (*backendRuntime, error) {
 	database.CleanupOldHistory()
 	cfg := database.LoadConfig()
 
+	listener, port, err := listenOnPreferredOrFreePort(host, preferredPort)
+	if err != nil {
+		database.Close()
+		closeLogs()
+		return nil, err
+	}
+	baseURL := fmt.Sprintf("http://%s:%d", host, port)
+
 	esiClient := esi.NewClient(database)
 	esiClient.LoadEVERefStructures()
 
 	clientID := envOrDefault("ESI_CLIENT_ID", defaultESIClientID)
 	clientSecret := envOrDefault("ESI_CLIENT_SECRET", defaultESIClientSecret)
-	callbackURL := envOrDefault("ESI_CALLBACK_URL", defaultESICallbackURL)
+	callbackURL := strings.TrimSpace(os.Getenv("ESI_CALLBACK_URL"))
+	if callbackURL == "" {
+		callbackURL = defaultESICallbackURL
+		if preferredPort != 0 && port != preferredPort {
+			callbackURL = fmt.Sprintf("http://localhost:%d/api/auth/callback", port)
+			logger.Warn("SSO", fmt.Sprintf(
+				"Using fallback callback URL %s because preferred desktop backend port %d is unavailable. EVE SSO may require closing the other Eve Flipper process.",
+				callbackURL,
+				preferredPort,
+			))
+		}
+	}
 
 	var ssoConfig *auth.SSOConfig
 	if clientID != "" && clientSecret != "" {
@@ -183,12 +211,11 @@ func startBackend(host string, port int) (*backendRuntime, error) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
 
-	baseURL := fmt.Sprintf("http://%s:%d", host, port)
 	if err := waitForBackendReady(baseURL, 15*time.Second, errCh); err != nil {
 		_ = httpServer.Close()
 		database.Close()
@@ -202,7 +229,67 @@ func startBackend(host string, port int) (*backendRuntime, error) {
 		httpServer: httpServer,
 		database:   database,
 		closeLogs:  closeLogs,
+		baseURL:    baseURL,
 	}, nil
+}
+
+func listenOnPreferredOrFreePort(host string, preferredPort int) (net.Listener, int, error) {
+	listen := func(port int) (net.Listener, int, error) {
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			return nil, 0, err
+		}
+		tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+		if !ok {
+			_ = ln.Close()
+			return nil, 0, fmt.Errorf("unexpected listener address: %s", ln.Addr())
+		}
+		return ln, tcpAddr.Port, nil
+	}
+
+	ln, port, err := listen(preferredPort)
+	if err == nil {
+		return ln, port, nil
+	}
+	if preferredPort == 0 {
+		return nil, 0, fmt.Errorf("listen on %s: %w", net.JoinHostPort(host, strconv.Itoa(preferredPort)), err)
+	}
+
+	fallback, fallbackPort, fallbackErr := listen(0)
+	if fallbackErr != nil {
+		return nil, 0, fmt.Errorf(
+			"listen on preferred %s failed: %w; fallback free port failed: %v",
+			net.JoinHostPort(host, strconv.Itoa(preferredPort)),
+			err,
+			fallbackErr,
+		)
+	}
+	logger.Warn("SERVER", fmt.Sprintf(
+		"Preferred desktop backend port %d is unavailable; using %s. Stop the other Eve Flipper process if EVE SSO callback on %d is needed.",
+		preferredPort,
+		net.JoinHostPort(host, strconv.Itoa(fallbackPort)),
+		preferredPort,
+	))
+	return fallback, fallbackPort, nil
+}
+
+func newBackendProxy(baseURL string) http.Handler {
+	target, err := url.Parse(baseURL)
+	if err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "backend proxy is not configured", http.StatusBadGateway)
+		})
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.Host = target.Host
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		http.Error(w, "backend unavailable: "+err.Error(), http.StatusBadGateway)
+	}
+	return proxy
 }
 
 func waitForBackendReady(baseURL string, timeout time.Duration, errCh <-chan error) error {
