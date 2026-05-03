@@ -29,7 +29,7 @@ test:
 frontend:
 	cd frontend && npm install && npm run build
 
-## frontend-wails: install deps and build frontend for Wails (API -> 127.0.0.1:13370)
+## frontend-wails: install deps and build frontend for Wails (API routed through Wails asset server)
 frontend-wails:
 	cd frontend && npm install && npm run build:wails
 
