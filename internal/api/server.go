@@ -4564,6 +4564,11 @@ func (s *Server) handleAuthCharacter(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wgChar.Done()
 			if txns, fetchErr := s.esi.GetWalletTransactions(sess.CharacterID, token); fetchErr == nil {
+				if s.db != nil {
+					if _, archiveErr := s.db.UpsertWalletTransactionsForUser(userID, sess.CharacterID, txns); archiveErr != nil {
+						log.Printf("[AUTH] Transactions archive error (%s): %v", sess.CharacterName, archiveErr)
+					}
+				}
 				muChar.Lock()
 				result.Transactions = txns
 				muChar.Unlock()
@@ -4648,6 +4653,13 @@ func (s *Server) handleAuthCharacter(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		result = *collected[0]
+	}
+	if s.db != nil {
+		if archivedTxns, archiveErr := s.db.ListArchivedWalletTransactions(userID, characterIDsForSessions(selectedSessions), time.Time{}, 100000); archiveErr == nil && len(archivedTxns) > len(result.Transactions) {
+			result.Transactions = archivedTxns
+		} else if archiveErr != nil {
+			log.Printf("[AUTH] Character transactions archive read error: %v", archiveErr)
+		}
 	}
 
 	// Enrich orders with type/location names
@@ -5353,6 +5365,11 @@ func (s *Server) handleAuthRebalanceIndustryProjectMaterials(w http.ResponseWrit
 		if fetchErr != nil {
 			return nil, fetchErr
 		}
+		if s.db != nil {
+			if _, archiveErr := s.db.UpsertWalletTransactionsForUser(userID, sess.CharacterID, freshTxns); archiveErr != nil {
+				log.Printf("[AUTH] Industry material rebalance transaction archive error (%s): %v", sess.CharacterName, archiveErr)
+			}
+		}
 
 		// Enrich type names from SDE so open-position aggregation has stable labels in downstream UI/debugging.
 		s.mu.RLock()
@@ -5381,6 +5398,13 @@ func (s *Server) handleAuthRebalanceIndustryProjectMaterials(w http.ResponseWrit
 			continue
 		}
 		txns = append(txns, part...)
+	}
+	if s.db != nil {
+		if archivedTxns, archiveErr := s.db.ListArchivedWalletTransactions(userID, characterIDsForSessions(selectedSessions), time.Time{}, 100000); archiveErr == nil && len(archivedTxns) > len(txns) {
+			txns = archivedTxns
+		} else if archiveErr != nil {
+			log.Printf("[AUTH] Industry material rebalance transaction archive read error: %v", archiveErr)
+		}
 	}
 	if len(txns) == 0 && len(selectedSessions) > 0 {
 		if allScope {
@@ -7039,10 +7063,22 @@ func (s *Server) handleAuthStationCommand(w http.ResponseWriter, r *http.Request
 			}
 			continue
 		}
+		if s.db != nil {
+			if _, archiveErr := s.db.UpsertWalletTransactionsForUser(userID, sess.CharacterID, freshTxns); archiveErr != nil {
+				log.Printf("[AUTH] StationCommand transaction archive error (%s): %v", sess.CharacterName, archiveErr)
+			}
+		}
 		if !allScope {
 			s.setWalletTxnCache(sess.CharacterID, freshTxns)
 		}
 		txns = append(txns, freshTxns...)
+	}
+	if s.db != nil {
+		if archivedTxns, archiveErr := s.db.ListArchivedWalletTransactions(userID, characterIDsForSessions(selectedSessions), time.Time{}, 100000); archiveErr == nil && len(archivedTxns) > len(txns) {
+			txns = archivedTxns
+		} else if archiveErr != nil {
+			log.Printf("[AUTH] StationCommand transaction archive read error: %v", archiveErr)
+		}
 	}
 
 	openPositions := make([]engine.OpenPosition, 0)
@@ -8058,6 +8094,11 @@ func (s *Server) stationAIBuildRuntimeContext(ctx context.Context, userID, local
 			))
 			return
 		}
+		if s.db != nil {
+			if archiveErr := s.db.UpdateWalletArchiveBalance(userID, sess.CharacterID, balance); archiveErr != nil {
+				log.Printf("[AI][RUNTIME] wallet balance archive error (%s): %v", sess.CharacterName, archiveErr)
+			}
+		}
 		mu.Lock()
 		runtime.WalletAvailable = true
 		runtime.WalletISK = balance
@@ -8116,8 +8157,20 @@ func (s *Server) stationAIBuildRuntimeContext(ctx context.Context, userID, local
 				))
 				return
 			}
+			if s.db != nil {
+				if _, archiveErr := s.db.UpsertWalletTransactionsForUser(userID, sess.CharacterID, freshTxns); archiveErr != nil {
+					log.Printf("[AI][RUNTIME] transaction archive error (%s): %v", sess.CharacterName, archiveErr)
+				}
+			}
 			s.setWalletTxnCache(sess.CharacterID, freshTxns)
 			txns = freshTxns
+		}
+		if s.db != nil {
+			if archivedTxns, archiveErr := s.db.ListArchivedWalletTransactions(userID, []int64{sess.CharacterID}, time.Time{}, 100000); archiveErr == nil && len(archivedTxns) > len(txns) {
+				txns = archivedTxns
+			} else if archiveErr != nil {
+				log.Printf("[AI][RUNTIME] transaction archive read error (%s): %v", sess.CharacterName, archiveErr)
+			}
 		}
 		s.stationAIEnrichTxnTypeNames(txns)
 		txSummary := stationAIRuntimeContext{
@@ -9910,11 +9963,16 @@ func (s *Server) handleAuthLedger(w http.ResponseWriter, r *http.Request) {
 
 	var journal []esi.WalletJournalEntry
 	var txns []esi.WalletTransaction
+	var liveJournal []esi.WalletJournalEntry
+	var liveTxns []esi.WalletTransaction
 	var orders []esi.CharacterOrder
 	var assets []esi.CharacterAsset
 	var walletISK float64
 	var warnings []string
+	var characterIDs []int64
 	successfulSessions := 0
+	txnFetchFailed := false
+	journalFetchFailed := false
 
 	fetchTxns := func(sess *auth.Session, token string) ([]esi.WalletTransaction, error) {
 		if cached, ok := s.getWalletTxnCache(sess.CharacterID); ok {
@@ -9929,6 +9987,7 @@ func (s *Server) handleAuthLedger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, sess := range selectedSessions {
+		characterIDs = append(characterIDs, sess.CharacterID)
 		token, tokenErr := s.sessions.EnsureValidTokenForUserCharacter(s.sso, userID, sess.CharacterID)
 		if tokenErr != nil {
 			log.Printf("[AUTH] Ledger token error (%s): %v", sess.CharacterName, tokenErr)
@@ -9943,21 +10002,41 @@ func (s *Server) handleAuthLedger(w http.ResponseWriter, r *http.Request) {
 
 		if balance, fetchErr := s.esi.GetWalletBalance(sess.CharacterID, token); fetchErr == nil {
 			walletISK += balance
+			if s.db != nil {
+				if archiveErr := s.db.UpdateWalletArchiveBalance(userID, sess.CharacterID, balance); archiveErr != nil {
+					log.Printf("[AUTH] Ledger archive wallet balance error (%s): %v", sess.CharacterName, archiveErr)
+					warnings = append(warnings, fmt.Sprintf("%s: wallet balance archive failed", sess.CharacterName))
+				}
+			}
 		} else {
 			log.Printf("[AUTH] Ledger wallet error (%s): %v", sess.CharacterName, fetchErr)
 			warnings = append(warnings, fmt.Sprintf("%s: wallet balance unavailable", sess.CharacterName))
 		}
 
 		if part, fetchErr := s.esi.GetWalletJournal(sess.CharacterID, token); fetchErr == nil {
-			journal = append(journal, part...)
+			liveJournal = append(liveJournal, part...)
+			if s.db != nil {
+				if _, archiveErr := s.db.UpsertWalletJournalForUser(userID, sess.CharacterID, part); archiveErr != nil {
+					log.Printf("[AUTH] Ledger journal archive error (%s): %v", sess.CharacterName, archiveErr)
+					warnings = append(warnings, fmt.Sprintf("%s: wallet journal archive failed", sess.CharacterName))
+				}
+			}
 		} else {
+			journalFetchFailed = true
 			log.Printf("[AUTH] Ledger journal error (%s): %v", sess.CharacterName, fetchErr)
 			warnings = append(warnings, fmt.Sprintf("%s: wallet journal unavailable", sess.CharacterName))
 		}
 
 		if part, fetchErr := fetchTxns(sess, token); fetchErr == nil {
-			txns = append(txns, part...)
+			liveTxns = append(liveTxns, part...)
+			if s.db != nil {
+				if _, archiveErr := s.db.UpsertWalletTransactionsForUser(userID, sess.CharacterID, part); archiveErr != nil {
+					log.Printf("[AUTH] Ledger transaction archive error (%s): %v", sess.CharacterName, archiveErr)
+					warnings = append(warnings, fmt.Sprintf("%s: market transaction archive failed", sess.CharacterName))
+				}
+			}
 		} else {
+			txnFetchFailed = true
 			log.Printf("[AUTH] Ledger transactions error (%s): %v", sess.CharacterName, fetchErr)
 			warnings = append(warnings, fmt.Sprintf("%s: market transactions unavailable", sess.CharacterName))
 		}
@@ -9979,6 +10058,43 @@ func (s *Server) handleAuthLedger(w http.ResponseWriter, r *http.Request) {
 	if successfulSessions == 0 {
 		writeError(w, 401, "failed to fetch character data")
 		return
+	}
+
+	var archiveStats db.WalletArchiveStats
+	journalSince := time.Now().UTC().AddDate(0, 0, -(days - 1))
+	if s.db != nil {
+		var archiveStatsErr error
+		archiveStats, archiveStatsErr = s.db.GetWalletArchiveStats(userID, characterIDs)
+		if archiveStatsErr != nil {
+			log.Printf("[AUTH] Ledger archive stats error: %v", archiveStatsErr)
+			warnings = append(warnings, "wallet archive stats unavailable")
+		}
+
+		if archivedJournal, archiveErr := s.db.ListArchivedWalletJournal(userID, characterIDs, journalSince, 50000); archiveErr == nil {
+			if len(archivedJournal) > 0 {
+				journal = archivedJournal
+			}
+		} else {
+			log.Printf("[AUTH] Ledger journal archive read error: %v", archiveErr)
+			warnings = append(warnings, "wallet journal archive read failed; using live ESI rows only")
+		}
+	}
+	if len(journal) == 0 {
+		journal = liveJournal
+	}
+
+	if s.db != nil {
+		if archivedTxns, archiveErr := s.db.ListArchivedWalletTransactions(userID, characterIDs, time.Time{}, 100000); archiveErr == nil {
+			if len(archivedTxns) > 0 {
+				txns = archivedTxns
+			}
+		} else {
+			log.Printf("[AUTH] Ledger transaction archive read error: %v", archiveErr)
+			warnings = append(warnings, "wallet transaction archive read failed; using live ESI rows only")
+		}
+	}
+	if len(txns) == 0 {
+		txns = liveTxns
 	}
 
 	s.mu.RLock()
@@ -10037,8 +10153,83 @@ func (s *Server) handleAuthLedger(w http.ResponseWriter, r *http.Request) {
 		BrokerFeePercent: brokerFee,
 		LedgerLimit:      500,
 	})
+	archiveFallbackUsed := (txnFetchFailed && archiveStats.TransactionRows > 0 && len(txns) > len(liveTxns)) ||
+		(journalFetchFailed && archiveStats.JournalRows > 0 && len(journal) > len(liveJournal))
+	result.Archive = buildEveLedgerArchiveInfo(archiveStats, len(liveTxns), len(liveJournal), len(txns), len(journal), archiveFallbackUsed)
+	result.Archive.Enabled = s.db != nil
 	result.Warnings = append(result.Warnings, warnings...)
 	writeJSON(w, result)
+}
+
+func buildEveLedgerArchiveInfo(stats db.WalletArchiveStats, liveTxns int, liveJournal int, usedTxns int, usedJournal int, archiveFallbackUsed bool) engine.EveLedgerArchiveInfo {
+	source := "empty"
+	usingArchive := stats.TransactionRows > 0 || stats.JournalRows > 0
+	usingLive := liveTxns > 0 || liveJournal > 0
+	switch {
+	case usingArchive && usingLive:
+		source = "live+archive"
+	case usingArchive:
+		source = "archive"
+	case usingLive:
+		source = "live"
+	}
+	info := engine.EveLedgerArchiveInfo{
+		Enabled:                 true,
+		Source:                  source,
+		Characters:              stats.Characters,
+		TransactionRows:         stats.TransactionRows,
+		JournalRows:             stats.JournalRows,
+		TransactionTurnoverISK:  stats.TransactionTurnoverISK,
+		LiveTransactionRows:     liveTxns,
+		LiveJournalRows:         liveJournal,
+		OldestTransactionDate:   stats.OldestTransactionDate,
+		NewestTransactionDate:   stats.NewestTransactionDate,
+		OldestJournalDate:       stats.OldestJournalDate,
+		NewestJournalDate:       stats.NewestJournalDate,
+		LastTransactionSync:     stats.LastTransactionSync,
+		LastJournalSync:         stats.LastJournalSync,
+		TransactionLimitHit:     stats.TransactionLimitHit,
+		JournalLimitHit:         stats.JournalLimitHit,
+		ArchiveTransactionLimit: stats.ArchiveTransactionLimit,
+		ArchiveJournalLimit:     stats.ArchiveJournalLimit,
+		UsingArchive:            usingArchive && (usedTxns > liveTxns || usedJournal > liveJournal || !usingLive),
+		UsingLive:               usingLive,
+		ArchiveFallbackUsed:     archiveFallbackUsed && usingArchive,
+	}
+	info.ArchiveCoverageDays = walletArchiveCoverageDays(stats)
+	return info
+}
+
+func walletArchiveCoverageDays(stats db.WalletArchiveStats) float64 {
+	oldest := stats.OldestTransactionDate
+	newest := stats.NewestTransactionDate
+	if oldest == "" || newest == "" {
+		oldest = stats.OldestJournalDate
+		newest = stats.NewestJournalDate
+	}
+	if oldest == "" || newest == "" {
+		return 0
+	}
+	start, errStart := time.Parse(time.RFC3339, oldest)
+	end, errEnd := time.Parse(time.RFC3339, newest)
+	if errStart != nil || errEnd != nil || end.Before(start) {
+		return 0
+	}
+	return end.Sub(start).Hours()/24 + 1
+}
+
+func characterIDsForSessions(sessions []*auth.Session) []int64 {
+	ids := make([]int64, 0, len(sessions))
+	seen := make(map[int64]bool, len(sessions))
+	for _, sess := range sessions {
+		if sess == nil || sess.CharacterID <= 0 || seen[sess.CharacterID] {
+			continue
+		}
+		seen[sess.CharacterID] = true
+		ids = append(ids, sess.CharacterID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func (s *Server) handleAuthPortfolio(w http.ResponseWriter, r *http.Request) {
@@ -10100,6 +10291,11 @@ func (s *Server) handleAuthPortfolio(w http.ResponseWriter, r *http.Request) {
 		if fetchErr != nil {
 			return nil, fetchErr
 		}
+		if s.db != nil {
+			if _, archiveErr := s.db.UpsertWalletTransactionsForUser(userID, sess.CharacterID, freshTxns); archiveErr != nil {
+				log.Printf("[AUTH] Portfolio transaction archive error (%s): %v", sess.CharacterName, archiveErr)
+			}
+		}
 
 		// Enrich type names from SDE
 		s.mu.RLock()
@@ -10118,21 +10314,31 @@ func (s *Server) handleAuthPortfolio(w http.ResponseWriter, r *http.Request) {
 
 	var txns []esi.WalletTransaction
 	successfulFetches := 0
+	txnFetchErrors := make([]string, 0, len(selectedSessions))
 	for _, sess := range selectedSessions {
 		part, fetchErr := fetchTxns(sess)
 		if fetchErr != nil {
 			log.Printf("[AUTH] Portfolio txns error (%s): %v", sess.CharacterName, fetchErr)
-			if !allScope {
-				writeError(w, 500, "failed to fetch transactions: "+fetchErr.Error())
-				return
-			}
+			txnFetchErrors = append(txnFetchErrors, fmt.Sprintf("%s: %v", sess.CharacterName, fetchErr))
 			continue
 		}
 		successfulFetches++
 		txns = append(txns, part...)
 	}
-	if successfulFetches == 0 && len(selectedSessions) > 0 {
-		if allScope {
+	if s.db != nil {
+		if archivedTxns, archiveErr := s.db.ListArchivedWalletTransactions(userID, characterIDsForSessions(selectedSessions), time.Time{}, 100000); archiveErr == nil && len(archivedTxns) > len(txns) {
+			if successfulFetches == 0 && len(txnFetchErrors) > 0 {
+				log.Printf("[AUTH] Portfolio using archived transactions after live fetch failure: %s", strings.Join(txnFetchErrors, "; "))
+			}
+			txns = archivedTxns
+		} else if archiveErr != nil {
+			log.Printf("[AUTH] Portfolio transaction archive read error: %v", archiveErr)
+		}
+	}
+	if successfulFetches == 0 && len(txns) == 0 && len(selectedSessions) > 0 {
+		if len(txnFetchErrors) > 0 {
+			writeError(w, 500, "failed to fetch transactions: "+strings.Join(txnFetchErrors, "; "))
+		} else if allScope {
 			writeError(w, 500, "failed to fetch transactions for selected characters")
 		} else {
 			writeError(w, 500, "failed to fetch transactions")
@@ -10188,6 +10394,11 @@ func (s *Server) handleAuthPortfolioOptimize(w http.ResponseWriter, r *http.Requ
 		if fetchErr != nil {
 			return nil, fetchErr
 		}
+		if s.db != nil {
+			if _, archiveErr := s.db.UpsertWalletTransactionsForUser(userID, sess.CharacterID, freshTxns); archiveErr != nil {
+				log.Printf("[AUTH] Optimizer transaction archive error (%s): %v", sess.CharacterName, archiveErr)
+			}
+		}
 
 		// Enrich type names from SDE
 		s.mu.RLock()
@@ -10209,18 +10420,17 @@ func (s *Server) handleAuthPortfolioOptimize(w http.ResponseWriter, r *http.Requ
 	var assets []esi.CharacterAsset
 	var walletISK float64
 	var warnings []string
+	txnFetchErrors := make([]string, 0, len(selectedSessions))
 	assetSnapshotComplete := len(selectedSessions) > 0
 	for _, sess := range selectedSessions {
 		part, fetchErr := fetchTxns(sess)
 		if fetchErr != nil {
 			log.Printf("[AUTH] Optimizer txns error (%s): %v", sess.CharacterName, fetchErr)
-			if !allScope {
-				writeError(w, 500, "failed to fetch transactions: "+fetchErr.Error())
-				return
-			}
-			continue
+			txnFetchErrors = append(txnFetchErrors, fmt.Sprintf("%s: %v", sess.CharacterName, fetchErr))
+			warnings = append(warnings, fmt.Sprintf("%s: transactions unavailable; using local archive if available", sess.CharacterName))
+		} else {
+			txns = append(txns, part...)
 		}
-		txns = append(txns, part...)
 
 		token, tokenErr := s.sessions.EnsureValidTokenForUserCharacter(s.sso, userID, sess.CharacterID)
 		if tokenErr != nil {
@@ -10249,8 +10459,20 @@ func (s *Server) handleAuthPortfolioOptimize(w http.ResponseWriter, r *http.Requ
 			log.Printf("[AUTH] Optimizer assets error (%s): %v", sess.CharacterName, assetsErr)
 		}
 	}
+	if s.db != nil {
+		if archivedTxns, archiveErr := s.db.ListArchivedWalletTransactions(userID, characterIDsForSessions(selectedSessions), time.Time{}, 100000); archiveErr == nil && len(archivedTxns) > len(txns) {
+			if len(txns) == 0 && len(txnFetchErrors) > 0 {
+				log.Printf("[AUTH] Optimizer using archived transactions after live fetch failure: %s", strings.Join(txnFetchErrors, "; "))
+			}
+			txns = archivedTxns
+		} else if archiveErr != nil {
+			log.Printf("[AUTH] Optimizer transaction archive read error: %v", archiveErr)
+		}
+	}
 	if len(txns) == 0 && len(selectedSessions) > 0 {
-		if allScope {
+		if len(txnFetchErrors) > 0 {
+			writeError(w, 500, "failed to fetch transactions: "+strings.Join(txnFetchErrors, "; "))
+		} else if allScope {
 			writeError(w, 500, "failed to fetch transactions for selected characters")
 		} else {
 			writeError(w, 500, "failed to fetch transactions")

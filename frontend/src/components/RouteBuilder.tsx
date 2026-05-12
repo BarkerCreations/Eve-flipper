@@ -86,6 +86,42 @@ function formatM3(v?: number): string {
   return `${m3.toFixed(m3 >= 10 ? 0 : 1)} m3`;
 }
 
+function dotlanRouteSegment(value: string): string {
+  return value.trim().replace(/[^'a-z0-9-\.:,=]/gi, "_");
+}
+
+function routeDotlanSystems(route: RouteResult): string[] {
+  const systems: string[] = [];
+  route.Hops.forEach((hop, index) => {
+    if (index === 0 && hop.SystemName) systems.push(hop.SystemName);
+    if (hop.DestSystemName) systems.push(hop.DestSystemName);
+  });
+  if (route.TargetSystemName) systems.push(route.TargetSystemName);
+  return systems
+    .map((system) => system.trim())
+    .filter(Boolean)
+    .filter((system, index, list) => index === 0 || system !== list[index - 1]);
+}
+
+function buildDotlanRouteURL(route: RouteResult): string | null {
+  const systems = routeDotlanSystems(route);
+  if (systems.length < 2) return null;
+  return `https://evemaps.dotlan.net/route/${systems.map(dotlanRouteSegment).join(":")}`;
+}
+
+function openExternalURL(url: string) {
+  const runtime = (window as any).runtime;
+  if (runtime?.runtime?.BrowserOpenURL) {
+    runtime.runtime.BrowserOpenURL(url);
+    return;
+  }
+  if (runtime?.BrowserOpenURL) {
+    runtime.BrowserOpenURL(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function routeHopToFlipResult(hop: RouteHop | null): FlipResult | null {
   if (!hop) return null;
   const units = Math.max(1, Math.floor(Number(hop.Units ?? 0)));
@@ -743,7 +779,9 @@ function RouteDetailPopup({
 }) {
   const { t } = useI18n();
   const { addToast } = useGlobalToast();
+  const { trackAchievementEvent } = useAchievements();
   const [execPlanHop, setExecPlanHop] = useState<RouteHop | null>(null);
+  const dotlanURL = useMemo(() => buildDotlanRouteURL(route), [route]);
 
   const handleSetWaypoint = async (systemID: number) => {
     try {
@@ -796,6 +834,17 @@ function RouteDetailPopup({
     } catch {
       addToast(t("errorSomethingWentWrong"), "error", 2200);
     }
+  };
+
+  const handleOpenDotlanRoute = () => {
+    if (!dotlanURL) {
+      addToast(t("routeDotlanUnavailable"), "error", 2200);
+      return;
+    }
+    openExternalURL(dotlanURL);
+    void trackAchievementEvent("dotlan_opened", {
+      redRouteRisk: route.HaulingDanger === "red",
+    });
   };
 
   return (
@@ -951,6 +1000,14 @@ function RouteDetailPopup({
             )}
           </div>
           <div className="flex flex-wrap justify-end gap-2">
+            <button
+              onClick={handleOpenDotlanRoute}
+              disabled={!dotlanURL}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px] font-semibold uppercase tracking-wider text-eve-dim border border-eve-border bg-eve-dark/60 hover:text-eve-text hover:border-eve-accent/30 hover:bg-eve-dark transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="text-[11px] leading-none">{"\u2197"}</span>
+              <span>{t("openDotlanRoute")}</span>
+            </button>
             <button
               onClick={handleCopySystems}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px] font-semibold uppercase tracking-wider text-eve-dim border border-eve-border bg-eve-dark/60 hover:text-eve-text hover:border-eve-accent/30 hover:bg-eve-dark transition-all"

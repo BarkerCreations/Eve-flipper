@@ -2061,6 +2061,31 @@ export interface EveLedgerSettings {
   broker_fee_percent: number;
 }
 
+export interface EveLedgerArchiveInfo {
+  enabled: boolean;
+  source: string;
+  characters: number;
+  transaction_rows: number;
+  journal_rows: number;
+  transaction_turnover_isk: number;
+  live_transaction_rows: number;
+  live_journal_rows: number;
+  oldest_transaction_date?: string;
+  newest_transaction_date?: string;
+  oldest_journal_date?: string;
+  newest_journal_date?: string;
+  last_transaction_sync?: string;
+  last_journal_sync?: string;
+  transaction_limit_hit: boolean;
+  journal_limit_hit: boolean;
+  archive_transaction_limit: number;
+  archive_journal_limit: number;
+  using_archive: boolean;
+  using_live: boolean;
+  archive_fallback_used: boolean;
+  archive_coverage_days: number;
+}
+
 export interface EveLedgerDashboard {
   summary: EveLedgerSummary;
   daily: EveLedgerCurvePoint[];
@@ -2069,6 +2094,7 @@ export interface EveLedgerDashboard {
   categories: EveLedgerCategory[];
   inventory: EveLedgerInventoryItem[];
   settings: EveLedgerSettings;
+  archive: EveLedgerArchiveInfo;
   warnings?: string[];
   portfolio?: PortfolioPnL;
 }

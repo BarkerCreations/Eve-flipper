@@ -770,10 +770,14 @@ export function TradeExecutionAutopilotPopup({
     const depthChanged =
       Math.abs(mission.buyFill.avg - buyBook) > Math.max(0.01, buyBook * 0.001) ||
       Math.abs(mission.sellFill.avg - sellBook) > Math.max(0.01, sellBook * 0.001);
+    const capitalConstraintsClear =
+      mission.reserveQty >= mission.requestedQty && mission.exposureQty >= mission.requestedQty;
     void trackAchievementEvent("mission_control_opened", {
       quantityReduced: mission.executableQty < mission.requestedQty,
       depthChangedResult: depthChanged,
       negativeWorstCase: mission.worstProfit < 0,
+      planWithinConstraints: capitalConstraintsClear,
+      constraintViolation: !capitalConstraintsClear,
       walletReserveLimited: mission.reserveQty < mission.requestedQty,
       exposureLimited: mission.exposureQty < mission.requestedQty,
       feesViewed: mission.totalFees > 0,

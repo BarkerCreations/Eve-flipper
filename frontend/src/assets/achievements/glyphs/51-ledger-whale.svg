@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+  <title>ledger whale</title>
+  <g transform="translate(0.4 0.4) scale(0.96)">
+    <path d="M6 4 H16 L19 7 V20 H6 Z"></path>
+    <path d="M16 4 V7 H19"></path>
+    <path d="M8.5 9 H15.5 M8.5 12 H13" opacity="0.6"></path>
+    <path d="M9 18 V15.5 M12 18 V13.5 M15 18 V11"></path>
+    <path d="M8 18 H16"></path>
+  </g>
+</svg>

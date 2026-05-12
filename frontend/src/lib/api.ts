@@ -155,6 +155,7 @@ export interface AchievementProgressPatch {
   progress: number;
   unlocked_at: string;
   seen?: boolean;
+  mode?: "set" | "increment" | "replace";
 }
 
 export interface AchievementStatesResponse {

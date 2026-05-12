@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -366,7 +367,11 @@ func (d *DB) RecordMarketOrderSnapshot(snapshot esi.MarketOrderSnapshot) error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	d.invalidateOrderBookStatsCache()
+	return nil
 }
 
 func scanOrderBookSnapshot(scanner interface{ Scan(dest ...any) error }) (OrderBookSnapshotMeta, error) {
@@ -555,6 +560,76 @@ func nullableStringValue(v sql.NullString) string {
 	return ""
 }
 
+func normalizeOrderBookStatsLimit(limit int) int {
+	if limit <= 0 {
+		return 10
+	}
+	if limit > 50 {
+		return 50
+	}
+	return limit
+}
+
+func (d *DB) orderBookStatsWatermark() (snapshotCount int64, maxSnapshotID int64, err error) {
+	if d == nil || d.sql == nil {
+		return 0, 0, nil
+	}
+	err = d.sql.QueryRow(`
+		SELECT COUNT(*), COALESCE(MAX(id), 0)
+		  FROM orderbook_snapshots
+	`).Scan(&snapshotCount, &maxSnapshotID)
+	return snapshotCount, maxSnapshotID, err
+}
+
+func (d *DB) cachedOrderBookStats(limit int, snapshotCount, maxSnapshotID int64) (OrderBookStats, bool, error) {
+	var payload string
+	var cachedSnapshotCount, cachedMaxSnapshotID int64
+	err := d.sql.QueryRow(`
+		SELECT snapshot_count, max_snapshot_id, payload_json
+		  FROM orderbook_stats_cache
+		 WHERE limit_count = ?
+	`, limit).Scan(&cachedSnapshotCount, &cachedMaxSnapshotID, &payload)
+	if err == sql.ErrNoRows {
+		return OrderBookStats{}, false, nil
+	}
+	if err != nil {
+		return OrderBookStats{}, false, err
+	}
+	if cachedSnapshotCount != snapshotCount || cachedMaxSnapshotID != maxSnapshotID {
+		return OrderBookStats{}, false, nil
+	}
+	var stats OrderBookStats
+	if err := json.Unmarshal([]byte(payload), &stats); err != nil {
+		return OrderBookStats{}, false, err
+	}
+	return stats, true, nil
+}
+
+func (d *DB) storeOrderBookStatsCache(limit int, snapshotCount, maxSnapshotID int64, stats OrderBookStats) error {
+	payload, err := json.Marshal(stats)
+	if err != nil {
+		return err
+	}
+	_, err = d.sql.Exec(`
+		INSERT INTO orderbook_stats_cache (
+			limit_count, snapshot_count, max_snapshot_id, payload_json, computed_at
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(limit_count) DO UPDATE SET
+			snapshot_count = excluded.snapshot_count,
+			max_snapshot_id = excluded.max_snapshot_id,
+			payload_json = excluded.payload_json,
+			computed_at = excluded.computed_at
+	`, limit, snapshotCount, maxSnapshotID, string(payload), utcRFC3339(time.Now().UTC()))
+	return err
+}
+
+func (d *DB) invalidateOrderBookStatsCache() {
+	if d == nil || d.sql == nil {
+		return
+	}
+	_, _ = d.sql.Exec(`DELETE FROM orderbook_stats_cache`)
+}
+
 func (d *DB) GetOrderBookStats(limit int) (OrderBookStats, error) {
 	if d == nil || d.sql == nil {
 		return OrderBookStats{
@@ -562,31 +637,49 @@ func (d *DB) GetOrderBookStats(limit int) (OrderBookStats, error) {
 			TopLocations: []OrderBookStatsLocation{},
 		}, nil
 	}
-	if limit <= 0 {
-		limit = 10
+	limit = normalizeOrderBookStatsLimit(limit)
+
+	snapshotCount, maxSnapshotID, err := d.orderBookStatsWatermark()
+	if err != nil {
+		return OrderBookStats{}, err
 	}
-	if limit > 50 {
-		limit = 50
+	if cached, ok, err := d.cachedOrderBookStats(limit, snapshotCount, maxSnapshotID); err != nil {
+		return OrderBookStats{}, err
+	} else if ok {
+		return cached, nil
 	}
 
+	stats, err := d.computeOrderBookStats(limit)
+	if err != nil {
+		return stats, err
+	}
+	if err := d.storeOrderBookStatsCache(limit, snapshotCount, maxSnapshotID, stats); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+func (d *DB) computeOrderBookStats(limit int) (OrderBookStats, error) {
 	var stats OrderBookStats
 	var oldest, newest sql.NullString
 	if err := d.sql.QueryRow(`
-		SELECT COUNT(*), MIN(captured_at), MAX(captured_at)
+		SELECT COUNT(*),
+		       COALESCE(SUM(level_count), 0),
+		       MIN(captured_at),
+		       MAX(captured_at)
 		  FROM orderbook_snapshots
-	`).Scan(&stats.SnapshotCount, &oldest, &newest); err != nil {
+	`).Scan(&stats.SnapshotCount, &stats.LevelCount, &oldest, &newest); err != nil {
 		return stats, err
 	}
 	stats.OldestCapturedAt = nullableStringValue(oldest)
 	stats.NewestCapturedAt = nullableStringValue(newest)
 
 	if err := d.sql.QueryRow(`
-		SELECT COUNT(*),
-		       COUNT(DISTINCT CASE WHEN type_id > 0 THEN type_id END),
+		SELECT COUNT(DISTINCT CASE WHEN type_id > 0 THEN type_id END),
 		       COUNT(DISTINCT CASE WHEN location_id > 0 THEN location_id END),
 		       COALESCE(SUM(volume_remain), 0)
 		  FROM orderbook_levels
-	`).Scan(&stats.LevelCount, &stats.UniqueTypeCount, &stats.UniqueLocationCount, &stats.TotalVolumeRemain); err != nil {
+	`).Scan(&stats.UniqueTypeCount, &stats.UniqueLocationCount, &stats.TotalVolumeRemain); err != nil {
 		return stats, err
 	}
 	stats.ApproxBytes = stats.SnapshotCount*320 + stats.LevelCount*96
@@ -725,6 +818,7 @@ func (d *DB) CleanupOrderBookSnapshots(keepDays int, dryRun bool, vacuum bool) (
 	if err := tx.Commit(); err != nil {
 		return plan, err
 	}
+	d.invalidateOrderBookStatsCache()
 	if plan.Vacuum {
 		if _, err := d.sql.Exec(`VACUUM`); err != nil {
 			return plan, err

@@ -205,6 +205,66 @@ func TestHandleAuthPortfolio_AllowsEmptyTransactions(t *testing.T) {
 	}
 }
 
+func TestHandleAuthPortfolio_UsesArchiveWhenLiveTransactionsFail(t *testing.T) {
+	database := openAPITestDB(t)
+	userID := "u-archived-portfolio"
+	characterID := int64(1001)
+	store := auth.NewSessionStore(database.SqlDB())
+	if err := store.SaveAndActivateForUser(userID, &auth.Session{
+		CharacterID:   characterID,
+		CharacterName: "Archived Trader",
+		AccessToken:   "expired-token",
+		RefreshToken:  "expired-refresh",
+		ExpiresAt:     time.Now().Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("SaveAndActivateForUser: %v", err)
+	}
+
+	txns := []esi.WalletTransaction{
+		{
+			TransactionID: 1,
+			Date:          time.Now().AddDate(0, 0, -2).UTC().Format(time.RFC3339),
+			TypeID:        34,
+			LocationID:    60003760,
+			UnitPrice:     100,
+			Quantity:      2,
+			IsBuy:         true,
+		},
+		{
+			TransactionID: 2,
+			Date:          time.Now().AddDate(0, 0, -1).UTC().Format(time.RFC3339),
+			TypeID:        34,
+			LocationID:    60003760,
+			UnitPrice:     150,
+			Quantity:      1,
+			IsBuy:         false,
+		},
+	}
+	if _, err := database.UpsertWalletTransactionsForUser(userID, characterID, txns); err != nil {
+		t.Fatalf("UpsertWalletTransactionsForUser: %v", err)
+	}
+
+	srv := NewServer(config.Default(), &esi.Client{}, database, nil, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/portfolio?character_id=1001", nil)
+	req.Header.Set(userIDHeaderName, userID)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/auth/portfolio status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Ledger []any `json:"ledger"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(out.Ledger) == 0 {
+		t.Fatalf("expected archived transactions to produce portfolio ledger, got none")
+	}
+}
+
 func TestEnsureRequestUserID_SignedCookieRoundTrip(t *testing.T) {
 	srv := NewServer(config.Default(), &esi.Client{}, nil, nil, nil)
 

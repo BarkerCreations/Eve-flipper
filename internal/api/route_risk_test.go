@@ -45,3 +45,15 @@ func TestRouteSafetyMultiplierFromSummary(t *testing.T) {
 		t.Fatalf("red multiplier = %v, want within [1.75, 3]", got)
 	}
 }
+
+func TestRouteHaulingRiskLimitCapsWork(t *testing.T) {
+	if got := routeHaulingRiskLimit(0); got != 0 {
+		t.Fatalf("limit(0) = %d, want 0", got)
+	}
+	if got := routeHaulingRiskLimit(12); got != 12 {
+		t.Fatalf("limit(12) = %d, want 12", got)
+	}
+	if got := routeHaulingRiskLimit(200); got != maxRouteHaulingRiskEnrich {
+		t.Fatalf("limit(200) = %d, want %d", got, maxRouteHaulingRiskEnrich)
+	}
+}

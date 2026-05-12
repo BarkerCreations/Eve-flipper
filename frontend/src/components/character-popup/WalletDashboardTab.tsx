@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAchievements } from "../achievements/AchievementsProvider";
 import { getEveLedgerDashboard, type CharacterScope } from "../../lib/api";
 import { type TranslationKey } from "../../lib/i18n";
 import type {
@@ -28,6 +29,8 @@ export function WalletDashboardTab({ characterScope, formatIsk, t }: WalletDashb
   const [data, setData] = useState<EveLedgerDashboard | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { trackAchievementEvent } = useAchievements();
+  const archiveAchievementKeyRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -59,6 +62,32 @@ export function WalletDashboardTab({ characterScope, formatIsk, t }: WalletDashb
     return data.daily ?? [];
   }, [data, period]);
 
+  useEffect(() => {
+    const archive = data?.archive;
+    if (!archive?.enabled) return;
+    const coverageDays = Math.max(0, archive.archive_coverage_days ?? 0);
+    const syncStreakDays = archive.transaction_rows > 0 && archive.journal_rows > 0 ? Math.min(30, Math.floor(coverageDays)) : 0;
+    const fallbackUsed = !!archive.archive_fallback_used;
+    const key = [
+      Math.round(coverageDays),
+      archive.transaction_rows,
+      archive.journal_rows,
+      Math.round(archive.transaction_turnover_isk ?? 0),
+      syncStreakDays,
+      fallbackUsed ? 1 : 0,
+    ].join(":");
+    if (archiveAchievementKeyRef.current === key) return;
+    archiveAchievementKeyRef.current = key;
+    void trackAchievementEvent("ledger_archive_updated", {
+      archiveCoverageDays: coverageDays,
+      archivedTransactions: archive.transaction_rows,
+      archivedJournalEntries: archive.journal_rows,
+      archiveTransactionTurnoverISK: archive.transaction_turnover_isk ?? 0,
+      archiveSyncStreakDays: syncStreakDays,
+      rateLimitArchiveFallback: fallbackUsed,
+    });
+  }, [data?.archive, trackAchievementEvent]);
+
   if (loading && !data) {
     return (
       <div className="flex items-center justify-center h-full text-eve-dim text-xs">
@@ -77,9 +106,11 @@ export function WalletDashboardTab({ characterScope, formatIsk, t }: WalletDashb
   }
 
   const summary = data.summary;
+  const archive = data.archive;
   const tradingTone = summary.trading_pnl_isk >= 0 ? "text-eve-profit" : "text-eve-error";
   const otherTone = summary.other_net_isk >= 0 ? "text-eve-profit" : "text-eve-error";
   const mtmTone = summary.unrealized_pnl_isk >= 0 ? "text-eve-profit" : "text-eve-error";
+  const archiveTone = archive?.using_archive ? "text-eve-accent" : "text-eve-dim";
 
   return (
     <div className="space-y-4">
@@ -130,6 +161,35 @@ export function WalletDashboardTab({ characterScope, formatIsk, t }: WalletDashb
         <StatCard label={t("ledgerOpenSell")} value={`${formatIsk(summary.sell_orders_value_isk)} ISK`} color="text-eve-accent" />
       </div>
 
+      {archive && (
+        <section className="border border-eve-border rounded-sm bg-eve-panel/70 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-eve-dim">{t("walletArchiveTitle")}</div>
+              <div className="text-[10px] text-eve-dim/80">
+                {t("walletArchiveDescription")}
+              </div>
+            </div>
+            <div className={`text-xs uppercase tracking-wider ${archiveTone}`}>
+              {archive.source.replace("+", " + ")}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 xl:grid-cols-6 gap-2 mt-3">
+            <MiniMetric label={t("walletArchiveArchivedTx")} value={archive.transaction_rows.toLocaleString()} />
+            <MiniMetric label={t("walletArchiveArchivedJournal")} value={archive.journal_rows.toLocaleString()} />
+            <MiniMetric label={t("walletArchiveLiveTx")} value={archive.live_transaction_rows.toLocaleString()} />
+            <MiniMetric label={t("walletArchiveLiveJournal")} value={archive.live_journal_rows.toLocaleString()} />
+            <MiniMetric label={t("walletArchiveCoverage")} value={archive.archive_coverage_days > 0 ? `${Math.round(archive.archive_coverage_days)}d` : t("walletArchiveNA")} />
+            <MiniMetric label={t("walletArchiveLastSync")} value={shortDate(archive.last_transaction_sync || archive.last_journal_sync, t("walletArchiveNever"))} />
+          </div>
+          {(archive.transaction_limit_hit || archive.journal_limit_hit) && (
+            <div className="mt-2 border border-eve-warning/30 bg-eve-warning/5 px-2 py-1.5 text-[10px] text-eve-warning">
+              {t("walletArchiveFullPageWarning")}
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="border border-eve-border rounded-sm bg-eve-panel p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div>
@@ -137,7 +197,7 @@ export function WalletDashboardTab({ characterScope, formatIsk, t }: WalletDashb
               {chartMode === "capital" ? "Capital curve" : chartMode === "cashflow" ? "Income / outgoing" : "Trading P&L vs other income"}
             </div>
             <div className="text-[10px] text-eve-dim/80">
-              {period} view, {curve.length} buckets
+              {period} view, {curve.length} buckets{curveRange(curve)}
             </div>
           </div>
           <Segmented
@@ -171,6 +231,22 @@ export function WalletDashboardTab({ characterScope, formatIsk, t }: WalletDashb
 
 function signed(formatIsk: (v: number) => string, value: number) {
   return `${value >= 0 ? "+" : ""}${formatIsk(value)}`;
+}
+
+function shortDate(value?: string, fallback = "never") {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border border-eve-border/70 bg-eve-dark/60 px-2 py-1.5 rounded-sm">
+      <div className="text-[9px] uppercase tracking-wider text-eve-dim">{label}</div>
+      <div className="text-xs text-eve-text font-mono">{value}</div>
+    </div>
+  );
 }
 
 function NumberControl({
@@ -243,9 +319,11 @@ function LedgerCurveChart({
   }
 
   const width = 900;
-  const height = 250;
+  const height = 270;
   const padX = 34;
-  const padY = 18;
+  const padTop = 18;
+  const padBottom = 34;
+  const chartBottom = height - padBottom;
   const values =
     mode === "capital"
       ? data.map((d) => d.capital_isk)
@@ -256,7 +334,7 @@ function LedgerCurveChart({
   const maxVal = Math.max(1, ...values);
   const range = maxVal - minVal || 1;
   const xStep = data.length > 1 ? (width - padX * 2) / (data.length - 1) : 0;
-  const y = (value: number) => padY + (1 - (value - minVal) / range) * (height - padY * 2);
+  const y = (value: number) => padTop + (1 - (value - minVal) / range) * (chartBottom - padTop);
   const zeroY = y(0);
   const barWidth = Math.max(3, Math.min(18, (width - padX * 2) / Math.max(1, data.length) - 3));
   const capitalLine = data.map((d, i) => `${padX + i * xStep},${y(d.capital_isk)}`).join(" ");
@@ -272,8 +350,8 @@ function LedgerCurveChart({
             key={p}
             x1={padX}
             x2={width - padX}
-            y1={padY + p * (height - padY * 2)}
-            y2={padY + p * (height - padY * 2)}
+            y1={padTop + p * (chartBottom - padTop)}
+            y2={padTop + p * (chartBottom - padTop)}
             stroke="rgba(120,120,120,0.14)"
           />
         ))}
@@ -316,14 +394,25 @@ function LedgerCurveChart({
             ))}
           </>
         )}
+
+        <g fill="rgba(170,170,170,0.9)" fontSize="10" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
+          <text x={padX} y={height - 9} textAnchor="start">{data[0]?.period}</text>
+          {data.length > 2 && (
+            <text x={width / 2} y={height - 9} textAnchor="middle">{data[Math.floor(data.length / 2)]?.period}</text>
+          )}
+          <text x={width - padX} y={height - 9} textAnchor="end">{data[data.length - 1]?.period}</text>
+        </g>
       </svg>
-      <div className="flex justify-between -mt-3 px-2 text-[9px] text-eve-dim">
-        <span>{data[0]?.period}</span>
-        {data.length > 2 && <span>{data[Math.floor(data.length / 2)]?.period}</span>}
-        <span>{data[data.length - 1]?.period}</span>
-      </div>
     </div>
   );
+}
+
+function curveRange(data: EveLedgerCurvePoint[]) {
+  if (data.length === 0) return "";
+  const first = data[0]?.period || data[0]?.start_date;
+  const last = data[data.length - 1]?.period || data[data.length - 1]?.end_date;
+  if (!first || !last || first === last) return "";
+  return ` · ${first} -> ${last}`;
 }
 
 function CategoryTable({

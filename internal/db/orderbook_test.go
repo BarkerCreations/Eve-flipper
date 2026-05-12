@@ -185,6 +185,25 @@ func TestOrderBookStatsAndCleanup(t *testing.T) {
 		t.Fatalf("stats detail = %#v", stats)
 	}
 
+	if err := d.RecordMarketOrderSnapshot(esi.MarketOrderSnapshot{
+		RegionID:   10000002,
+		OrderType:  "sell",
+		Source:     "region",
+		CapturedAt: now.Add(-30 * time.Minute),
+		Orders: []esi.MarketOrder{
+			{OrderID: 3, TypeID: 36, LocationID: 60008494, SystemID: 30000144, Price: 9.0, VolumeRemain: 25, IsBuyOrder: false},
+		},
+	}); err != nil {
+		t.Fatalf("record cache invalidating snapshot: %v", err)
+	}
+	stats, err = d.GetOrderBookStats(5)
+	if err != nil {
+		t.Fatalf("stats after cache invalidating snapshot: %v", err)
+	}
+	if stats.SnapshotCount != 3 || stats.LevelCount != 3 || stats.TotalVolumeRemain != 175 {
+		t.Fatalf("stats after cache invalidating snapshot = %#v", stats)
+	}
+
 	preview, err := d.CleanupOrderBookSnapshots(30, true, false)
 	if err != nil {
 		t.Fatalf("preview cleanup: %v", err)
@@ -196,7 +215,7 @@ func TestOrderBookStatsAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list after preview: %v", err)
 	}
-	if len(snaps) != 2 {
+	if len(snaps) != 3 {
 		t.Fatalf("dry-run deleted snapshots, got %d", len(snaps))
 	}
 
@@ -211,7 +230,7 @@ func TestOrderBookStatsAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stats after cleanup: %v", err)
 	}
-	if stats.SnapshotCount != 1 || stats.LevelCount != 1 || stats.UniqueTypeCount != 1 || stats.TopTypes[0].TypeID != 35 {
+	if stats.SnapshotCount != 2 || stats.LevelCount != 2 || stats.UniqueTypeCount != 2 || stats.TopTypes[0].TypeID != 35 {
 		t.Fatalf("stats after cleanup = %#v", stats)
 	}
 }

@@ -23,6 +23,7 @@ type AchievementProgressPatch struct {
 	Progress      int64  `json:"progress"`
 	UnlockedAt    string `json:"unlocked_at"`
 	Seen          *bool  `json:"seen,omitempty"`
+	Mode          string `json:"mode,omitempty"`
 }
 
 func cleanAchievementID(id string) string {
@@ -120,6 +121,7 @@ func (d *DB) ApplyAchievementPatchesForUser(userID string, patches []Achievement
 		if patch.Progress < 0 {
 			patch.Progress = 0
 		}
+		mode := strings.ToLower(strings.TrimSpace(patch.Mode))
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		unlockedAt := cleanAchievementTime(patch.UnlockedAt)
 		seenInt := 0
@@ -156,7 +158,9 @@ func (d *DB) ApplyAchievementPatchesForUser(userID string, patches []Achievement
 			}
 		} else {
 			nextProgress := existing.Progress
-			if patch.Progress > nextProgress {
+			if mode == "replace" && existing.UnlockedAt == "" {
+				nextProgress = patch.Progress
+			} else if patch.Progress > nextProgress {
 				nextProgress = patch.Progress
 			}
 			nextUnlockedAt := existing.UnlockedAt

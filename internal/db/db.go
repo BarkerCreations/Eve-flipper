@@ -1457,6 +1457,99 @@ func (d *DB) migrate() error {
 		logger.Info("DB", "Applied migration v33 (achievements)")
 	}
 
+	if version < 34 {
+		_, err := d.sql.Exec(`
+			CREATE TABLE IF NOT EXISTS wallet_transactions_archive (
+				user_id         TEXT NOT NULL,
+				character_id    INTEGER NOT NULL,
+				transaction_id  INTEGER NOT NULL,
+				date            TEXT NOT NULL,
+				type_id         INTEGER NOT NULL DEFAULT 0,
+				location_id     INTEGER NOT NULL DEFAULT 0,
+				unit_price      REAL NOT NULL DEFAULT 0,
+				quantity        INTEGER NOT NULL DEFAULT 0,
+				is_buy          INTEGER NOT NULL DEFAULT 0,
+				type_name       TEXT NOT NULL DEFAULT '',
+				location_name   TEXT NOT NULL DEFAULT '',
+				first_seen_at   TEXT NOT NULL,
+				last_seen_at    TEXT NOT NULL,
+				PRIMARY KEY (user_id, character_id, transaction_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_wallet_tx_archive_user_date
+				ON wallet_transactions_archive(user_id, date DESC);
+			CREATE INDEX IF NOT EXISTS idx_wallet_tx_archive_char_date
+				ON wallet_transactions_archive(user_id, character_id, date DESC);
+			CREATE INDEX IF NOT EXISTS idx_wallet_tx_archive_type
+				ON wallet_transactions_archive(user_id, type_id, date DESC);
+
+			CREATE TABLE IF NOT EXISTS wallet_journal_archive (
+				user_id          TEXT NOT NULL,
+				character_id     INTEGER NOT NULL,
+				entry_id         INTEGER NOT NULL,
+				date             TEXT NOT NULL,
+				ref_type         TEXT NOT NULL DEFAULT '',
+				first_party_id   INTEGER NOT NULL DEFAULT 0,
+				second_party_id  INTEGER NOT NULL DEFAULT 0,
+				amount           REAL NOT NULL DEFAULT 0,
+				balance          REAL NOT NULL DEFAULT 0,
+				reason           TEXT NOT NULL DEFAULT '',
+				description      TEXT NOT NULL DEFAULT '',
+				tax              REAL NOT NULL DEFAULT 0,
+				tax_receiver_id  INTEGER NOT NULL DEFAULT 0,
+				context_id       INTEGER NOT NULL DEFAULT 0,
+				context_id_type  TEXT NOT NULL DEFAULT '',
+				first_seen_at    TEXT NOT NULL,
+				last_seen_at     TEXT NOT NULL,
+				PRIMARY KEY (user_id, character_id, entry_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_wallet_journal_archive_user_date
+				ON wallet_journal_archive(user_id, date DESC);
+			CREATE INDEX IF NOT EXISTS idx_wallet_journal_archive_char_date
+				ON wallet_journal_archive(user_id, character_id, date DESC);
+			CREATE INDEX IF NOT EXISTS idx_wallet_journal_archive_ref
+				ON wallet_journal_archive(user_id, ref_type, date DESC);
+
+			CREATE TABLE IF NOT EXISTS wallet_archive_sync (
+				user_id                   TEXT NOT NULL,
+				character_id              INTEGER NOT NULL,
+				transaction_synced_at      TEXT NOT NULL DEFAULT '',
+				journal_synced_at          TEXT NOT NULL DEFAULT '',
+				wallet_balance             REAL NOT NULL DEFAULT 0,
+				wallet_balance_at          TEXT NOT NULL DEFAULT '',
+				transaction_live_count      INTEGER NOT NULL DEFAULT 0,
+				journal_live_count          INTEGER NOT NULL DEFAULT 0,
+				transaction_limit_hit       INTEGER NOT NULL DEFAULT 0,
+				journal_limit_hit           INTEGER NOT NULL DEFAULT 0,
+				updated_at                 TEXT NOT NULL,
+				PRIMARY KEY (user_id, character_id)
+			);
+
+			INSERT OR IGNORE INTO schema_version (version) VALUES (34);
+		`)
+		if err != nil {
+			return fmt.Errorf("migration v34: %w", err)
+		}
+		logger.Info("DB", "Applied migration v34 (wallet ledger archive)")
+	}
+
+	if version < 35 {
+		_, err := d.sql.Exec(`
+			CREATE TABLE IF NOT EXISTS orderbook_stats_cache (
+				limit_count     INTEGER PRIMARY KEY,
+				snapshot_count  INTEGER NOT NULL DEFAULT 0,
+				max_snapshot_id INTEGER NOT NULL DEFAULT 0,
+				payload_json    TEXT NOT NULL,
+				computed_at     TEXT NOT NULL
+			);
+
+			INSERT OR IGNORE INTO schema_version (version) VALUES (35);
+		`)
+		if err != nil {
+			return fmt.Errorf("migration v35: %w", err)
+		}
+		logger.Info("DB", "Applied migration v35 (orderbook stats cache)")
+	}
+
 	return nil
 }
 

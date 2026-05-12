@@ -10,6 +10,7 @@ export type AchievementEventName =
   | "backtest_run"
   | "route_checked"
   | "dotlan_opened"
+  | "ledger_archive_updated"
   | "industry_analysis_run"
   | "ledger_opened"
   | "portfolio_opened"
@@ -20,6 +21,8 @@ export interface AchievementEventPayload {
   quantityReduced?: boolean;
   depthChangedResult?: boolean;
   negativeWorstCase?: boolean;
+  planWithinConstraints?: boolean;
+  constraintViolation?: boolean;
   walletReserveLimited?: boolean;
   exposureLimited?: boolean;
   feesViewed?: boolean;
@@ -36,6 +39,8 @@ export interface AchievementEventPayload {
   marketMoved?: boolean;
   undercutLoss?: boolean;
   previousLoss?: boolean;
+  actualVsExpectedDeltaPct?: number;
+  profitableCategoryProgress?: number;
   snapshotReplay?: boolean;
   paperProfitReducedByLiveDepth?: boolean;
   blueprintCoverageChecked?: boolean;
@@ -46,9 +51,16 @@ export interface AchievementEventPayload {
   avoidedTrade?: boolean;
   quietWin?: boolean;
   auditRun?: boolean;
+  archiveCoverageDays?: number;
+  archivedTransactions?: number;
+  archivedJournalEntries?: number;
+  archiveTransactionTurnoverISK?: number;
+  archiveSyncStreakDays?: number;
+  rateLimitArchiveFallback?: boolean;
+  redRouteRisk?: boolean;
 }
 
-type ProgressMode = "set" | "increment";
+type ProgressMode = "set" | "increment" | "replace";
 
 interface ProgressIntent {
   id: AchievementIconId;
@@ -85,7 +97,6 @@ function pushEventIntents(event: AchievementEventName, payload: AchievementEvent
       addIntent(intents, "fee-awareness");
       if (payload.quantityReduced) addIntent(intents, "not-so-fast");
       if (payload.depthChangedResult) addIntent(intents, "depth-matters");
-      if (payload.negativeWorstCase) addIntent(intents, "no-paper-profit");
       if (payload.walletReserveLimited) addIntent(intents, "capital-guard");
       if (payload.exposureLimited) addIntent(intents, "exposure-control");
       if (payload.tooSmallToTrade) addIntent(intents, "too-small-to-trade");
@@ -94,6 +105,8 @@ function pushEventIntents(event: AchievementEventName, payload: AchievementEvent
       if (payload.routeMode === "safest") addIntent(intents, "safe-route");
       if (payload.routeMode === "isk_hour") addIntent(intents, "isk-hour-mindset");
       if (payload.gankRiskViewed) addIntent(intents, "camp-check");
+      if (payload.planWithinConstraints) addIntent(intents, "capital-discipline", 1, "increment");
+      if (payload.constraintViolation) addIntent(intents, "capital-discipline", 0, "replace");
       break;
     case "journal_trade_created":
       addIntent(intents, "first-mission");
@@ -110,6 +123,12 @@ function pushEventIntents(event: AchievementEventName, payload: AchievementEvent
       if (payload.marketMoved) addIntent(intents, "market-moved");
       if (payload.undercutLoss) addIntent(intents, "undercut-tax");
       if (payload.profitable && payload.previousLoss) addIntent(intents, "comeback-trader");
+      if (payload.expectedVsActualCompared && (payload.actualVsExpectedDeltaPct ?? Number.POSITIVE_INFINITY) <= 10) {
+        addIntent(intents, "no-paper-profit", 1, "increment");
+      }
+      if ((payload.profitableCategoryProgress ?? 0) > 0) {
+        addIntent(intents, "edge-lord", Math.trunc(payload.profitableCategoryProgress ?? 0));
+      }
       break;
     case "backtest_run":
       addIntent(intents, "backtest-curious");
@@ -126,7 +145,25 @@ function pushEventIntents(event: AchievementEventName, payload: AchievementEvent
       break;
     case "dotlan_opened":
       addIntent(intents, "dotlan-navigator");
+      addIntent(intents, "cartographer-pro", 1, "increment");
+      if (payload.redRouteRisk) addIntent(intents, "crash-cartographer");
       break;
+    case "ledger_archive_updated": {
+      const coverageDays = Math.max(0, payload.archiveCoverageDays ?? 0);
+      const archivedTransactions = Math.max(0, Math.trunc(payload.archivedTransactions ?? 0));
+      const archivedJournalEntries = Math.max(0, Math.trunc(payload.archivedJournalEntries ?? 0));
+      const turnoverISK = Math.max(0, Math.trunc(payload.archiveTransactionTurnoverISK ?? 0));
+      const auditPct = Math.floor(Math.min(1, coverageDays / 90, archivedTransactions / 10_000) * 100);
+      if (auditPct > 0) addIntent(intents, "audit-proof", auditPct);
+      if (turnoverISK > 0) addIntent(intents, "ledger-whale", turnoverISK);
+      if (payload.rateLimitArchiveFallback) addIntent(intents, "rate-limit-immortal", 1, "increment");
+      if (payload.archiveSyncStreakDays && payload.archiveSyncStreakDays > 0) {
+        addIntent(intents, "clean-books", Math.trunc(payload.archiveSyncStreakDays));
+      }
+      const forensicRows = Math.min(archivedTransactions, archivedJournalEntries);
+      if (forensicRows > 0) addIntent(intents, "black-box-forensic", forensicRows);
+      break;
+    }
     case "industry_analysis_run":
       addIntent(intents, "industry-check");
       if (payload.blueprintCoverageChecked) addIntent(intents, "blueprint-mindset");
@@ -165,7 +202,8 @@ export function buildAchievementPatches(
     const definition = achievementDefinitionById[intent.id];
     const base = nextProgress.get(intent.id) ?? currentProgress(states, intent.id);
     const value = Math.max(0, Math.trunc(intent.value ?? 1));
-    const progress = intent.mode === "increment" ? base + value : Math.max(base, value);
+    const progress =
+      intent.mode === "increment" ? base + value : intent.mode === "replace" ? value : Math.max(base, value);
     nextProgress.set(intent.id, Math.min(definition.progressMax, progress));
   }
 
@@ -178,6 +216,7 @@ export function buildAchievementPatches(
       achievement_id: id,
       progress,
       unlocked_at: !alreadyUnlocked && progress >= definition.progressMax ? now : "",
+      mode: definition.progressMax > 1 && progress < currentProgress(states, id) ? "replace" : undefined,
     });
   }
   return patches;

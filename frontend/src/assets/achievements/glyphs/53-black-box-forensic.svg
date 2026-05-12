@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+  <title>black box forensic</title>
+  <g transform="translate(0.3 0.4) scale(0.97)">
+    <rect x="5" y="6" width="11.5" height="10.5" rx="1"></rect>
+    <path d="M7.5 9 H14 M7.5 12 H12" opacity="0.6"></path>
+    <circle cx="16.5" cy="16.2" r="3.1"></circle>
+    <path d="M18.8 18.5 L21 20.7"></path>
+    <path d="M4 10 H2.8 M4 13 H2.8 M18.2 9 H21" opacity="0.55"></path>
+  </g>
+</svg>

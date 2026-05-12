@@ -94,6 +94,48 @@ function parseDraftNumber(value: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function actualVsExpectedDeltaPct(trade: PaperTrade): number | undefined {
+  const expected = trade.expected_profit_isk || trade.planned_profit_isk || 0;
+  const denominator = Math.abs(expected);
+  if (denominator <= 0) return undefined;
+  return (Math.abs((trade.realized_profit_isk || 0) - expected) / denominator) * 100;
+}
+
+const edgeCategoryStoreKey = "eveflipper:achievements:edge-category-wins:v1";
+
+function paperTradeCategoryKey(trade: PaperTrade): string {
+  const name = (trade.type_name || "").toLowerCase();
+  if (/(veldspar|plagioclase|scordite|pyroxeres|kernite|omber|jaspet|hedbergite|hemorphite|gneiss|ochre|crokite|bistot|arkonor|mercoxit|ore|mineral|gas|isogen|mexallon|tritanium|pyerite|zydrine|nocxium|megacyte|morphite)/.test(name)) {
+    return "resources";
+  }
+  if (/(rocket|missile|charge|ammo|frequency crystal|hybrid charge|projectile|bomb)/.test(name)) return "ammo";
+  if (/(implant|hardwiring|booster)/.test(name)) return "implants";
+  if (/(blueprint|reaction|decryptor|datacore|component|fuel block|cache partition)/.test(name)) return "industry";
+  if (/(skin|license|apparel|clothing)/.test(name)) return "cosmetics";
+  if (/(module|launcher|turret|repairer|shield|armor|propulsion|afterburner|microwarpdrive|scrambler|disruptor|webifier|enhancer|amplifier|hardener|extender|plate|rig)/.test(name)) {
+    return "modules";
+  }
+  if (/(ship|frigate|destroyer|cruiser|battlecruiser|battleship|industrial|freighter|transport)/.test(name)) return "ships";
+  return (trade.source || "market").toLowerCase().replace(/[^a-z0-9_-]+/g, "_") || "market";
+}
+
+function recordProfitableCategoryProgress(trade: PaperTrade): number | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const raw = window.localStorage.getItem(edgeCategoryStoreKey);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, number[]>) : {};
+    const category = paperTradeCategoryKey(trade);
+    const ids = new Set<number>(Array.isArray(parsed[category]) ? parsed[category] : []);
+    ids.add(trade.id);
+    const next = Array.from(ids).sort((a, b) => a - b).slice(-500);
+    parsed[category] = next;
+    window.localStorage.setItem(edgeCategoryStoreKey, JSON.stringify(parsed));
+    return next.length;
+  } catch {
+    return undefined;
+  }
+}
+
 function statusTone(status: string): string {
   switch (status) {
     case "sold":
@@ -506,6 +548,7 @@ export function PaperTradeJournalPopup({ open, onClose }: Props) {
       if (!row.suggested_patch) return;
       const updated = await patchTrade(trade, row.suggested_patch, "Live fact applied");
       if (!updated) return;
+      const edgeProgress = updated.realized_profit_isk > 0 ? recordProfitableCategoryProgress(updated) : undefined;
       void trackAchievementEvent("journal_reconciled", {
         expectedVsActualCompared: true,
         profitable: updated.realized_profit_isk > 0,
@@ -514,6 +557,8 @@ export function PaperTradeJournalPopup({ open, onClose }: Props) {
         slippageLoss: updated.actual_buy_price > updated.planned_buy_price || updated.actual_sell_price < updated.planned_sell_price,
         marketMoved: Math.abs(updated.actual_sell_price - updated.planned_sell_price) > Math.max(0.01, updated.planned_sell_price * 0.01),
         undercutLoss: updated.fees_isk > 0 && updated.realized_profit_isk < updated.expected_profit_isk,
+        actualVsExpectedDeltaPct: actualVsExpectedDeltaPct(updated),
+        profitableCategoryProgress: edgeProgress,
       });
       setReconcileRows((prev) =>
         prev.map((item) =>
@@ -570,6 +615,7 @@ export function PaperTradeJournalPopup({ open, onClose }: Props) {
         `Status: ${statusLabel(status)}`,
       );
       if (updated && (status === "sold" || status === "reconciled")) {
+        const edgeProgress = updated.realized_profit_isk > 0 ? recordProfitableCategoryProgress(updated) : undefined;
         void trackAchievementEvent("journal_reconciled", {
           expectedVsActualCompared: true,
           profitable: updated.realized_profit_isk > 0,
@@ -578,6 +624,8 @@ export function PaperTradeJournalPopup({ open, onClose }: Props) {
           slippageLoss: updated.actual_buy_price > updated.planned_buy_price || updated.actual_sell_price < updated.planned_sell_price,
           marketMoved: Math.abs(updated.actual_sell_price - updated.planned_sell_price) > Math.max(0.01, updated.planned_sell_price * 0.01),
           undercutLoss: updated.fees_isk > 0 && updated.realized_profit_isk < updated.expected_profit_isk,
+          actualVsExpectedDeltaPct: actualVsExpectedDeltaPct(updated),
+          profitableCategoryProgress: edgeProgress,
         });
       }
       if (filter === "active" && (status === "sold" || status === "reconciled" || status === "cancelled")) {

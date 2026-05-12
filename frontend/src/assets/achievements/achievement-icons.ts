@@ -45,6 +45,15 @@ import classifiedUnknown02Glyph from "./glyphs/44-classified-unknown-02.svg?raw"
 import disciplineOverGreedGlyph from "./glyphs/45-discipline-over-greed.svg?raw";
 import classifiedUnknown03Glyph from "./glyphs/46-classified-unknown-03.svg?raw";
 import classifiedUnknown04Glyph from "./glyphs/47-classified-unknown-04.svg?raw";
+import auditProofGlyph from "./glyphs/48-audit-proof.svg?raw";
+import rateLimitImmortalGlyph from "./glyphs/49-rate-limit-immortal.svg?raw";
+import cartographerProGlyph from "./glyphs/50-cartographer-pro.svg?raw";
+import ledgerWhaleGlyph from "./glyphs/51-ledger-whale.svg?raw";
+import cleanBooksGlyph from "./glyphs/52-clean-books.svg?raw";
+import blackBoxForensicGlyph from "./glyphs/53-black-box-forensic.svg?raw";
+import crashCartographerGlyph from "./glyphs/54-crash-cartographer.svg?raw";
+import capitalDisciplineGlyph from "./glyphs/55-capital-discipline.svg?raw";
+import edgeLordGlyph from "./glyphs/56-edge-lord.svg?raw";
 
 export const achievementIcons = [
   { id: "first-contact", glyph: firstContactGlyph },
@@ -94,6 +103,15 @@ export const achievementIcons = [
   { id: "discipline-over-greed", glyph: disciplineOverGreedGlyph },
   { id: "classified-unknown-03", glyph: classifiedUnknown03Glyph },
   { id: "classified-unknown-04", glyph: classifiedUnknown04Glyph },
+  { id: "audit-proof", glyph: auditProofGlyph },
+  { id: "rate-limit-immortal", glyph: rateLimitImmortalGlyph },
+  { id: "cartographer-pro", glyph: cartographerProGlyph },
+  { id: "ledger-whale", glyph: ledgerWhaleGlyph },
+  { id: "clean-books", glyph: cleanBooksGlyph },
+  { id: "black-box-forensic", glyph: blackBoxForensicGlyph },
+  { id: "crash-cartographer", glyph: crashCartographerGlyph },
+  { id: "capital-discipline", glyph: capitalDisciplineGlyph },
+  { id: "edge-lord", glyph: edgeLordGlyph },
 ] as const;
 
 export type AchievementIconId = (typeof achievementIcons)[number]["id"];

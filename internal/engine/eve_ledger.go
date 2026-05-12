@@ -25,6 +25,7 @@ type EveLedgerDashboard struct {
 	Categories []EveLedgerCategory      `json:"categories"`
 	Inventory  []EveLedgerInventoryItem `json:"inventory"`
 	Settings   EveLedgerSettings        `json:"settings"`
+	Archive    EveLedgerArchiveInfo     `json:"archive"`
 	Warnings   []string                 `json:"warnings,omitempty"`
 	Portfolio  *PortfolioPnL            `json:"portfolio,omitempty"`
 }
@@ -33,6 +34,31 @@ type EveLedgerSettings struct {
 	LookbackDays     int     `json:"lookback_days"`
 	SalesTaxPercent  float64 `json:"sales_tax_percent"`
 	BrokerFeePercent float64 `json:"broker_fee_percent"`
+}
+
+type EveLedgerArchiveInfo struct {
+	Enabled                 bool    `json:"enabled"`
+	Source                  string  `json:"source"`
+	Characters              int     `json:"characters"`
+	TransactionRows         int     `json:"transaction_rows"`
+	JournalRows             int     `json:"journal_rows"`
+	TransactionTurnoverISK  float64 `json:"transaction_turnover_isk"`
+	LiveTransactionRows     int     `json:"live_transaction_rows"`
+	LiveJournalRows         int     `json:"live_journal_rows"`
+	OldestTransactionDate   string  `json:"oldest_transaction_date,omitempty"`
+	NewestTransactionDate   string  `json:"newest_transaction_date,omitempty"`
+	OldestJournalDate       string  `json:"oldest_journal_date,omitempty"`
+	NewestJournalDate       string  `json:"newest_journal_date,omitempty"`
+	LastTransactionSync     string  `json:"last_transaction_sync,omitempty"`
+	LastJournalSync         string  `json:"last_journal_sync,omitempty"`
+	TransactionLimitHit     bool    `json:"transaction_limit_hit"`
+	JournalLimitHit         bool    `json:"journal_limit_hit"`
+	ArchiveTransactionLimit int     `json:"archive_transaction_limit"`
+	ArchiveJournalLimit     int     `json:"archive_journal_limit"`
+	UsingArchive            bool    `json:"using_archive"`
+	UsingLive               bool    `json:"using_live"`
+	ArchiveFallbackUsed     bool    `json:"archive_fallback_used"`
+	ArchiveCoverageDays     float64 `json:"archive_coverage_days"`
 }
 
 type EveLedgerSummary struct {

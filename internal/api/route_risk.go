@@ -4,12 +4,23 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"eve-flipper/internal/engine"
 	"eve-flipper/internal/gankcheck"
 )
 
-const maxRouteHaulingRiskEnrich = 200
+const (
+	maxRouteHaulingRiskEnrich   = 80
+	routeHaulingRiskTotalBudget = 12 * time.Second
+	routeHaulingRiskLegBudget   = 2 * time.Second
+)
+
+type routeRiskSegmentKey struct {
+	from       int32
+	to         int32
+	minSecHash int
+}
 
 func (s *Server) enrichRouteHaulingRisk(
 	routes []engine.RouteResult,
@@ -28,10 +39,7 @@ func (s *Server) enrichRouteHaulingRisk(
 	}
 	targetSystemID := s.systemIDByName(targetSystemName)
 
-	limit := len(routes)
-	if limit > maxRouteHaulingRiskEnrich {
-		limit = maxRouteHaulingRiskEnrich
-	}
+	limit := routeHaulingRiskLimit(len(routes))
 	if progress != nil {
 		msg := "Scoring hauling gank risk..."
 		if limit < len(routes) {
@@ -40,26 +48,67 @@ func (s *Server) enrichRouteHaulingRisk(
 		progress(msg)
 	}
 
+	deadline := time.Now().Add(routeHaulingRiskTotalBudget)
+	segmentCache := make(map[routeRiskSegmentKey][]gankcheck.SystemDanger)
+	timedOut := false
 	for i := 0; i < limit; i++ {
+		if time.Now().After(deadline) {
+			timedOut = true
+			break
+		}
 		summary := routeHaulingRiskSummary{}
 		prevSystemID := startSystemID
 		for _, hop := range routes[i].Hops {
 			if hop.SystemID > 0 && prevSystemID > 0 && hop.SystemID != prevSystemID {
-				summary.add(s.routeDangerSystems(prevSystemID, hop.SystemID, minSec))
+				systems, timeout := s.routeDangerSystemsCached(prevSystemID, hop.SystemID, minSec, deadline, segmentCache)
+				if timeout {
+					timedOut = true
+					break
+				}
+				summary.add(systems)
 			}
 			if hop.SystemID > 0 && hop.DestSystemID > 0 && hop.SystemID != hop.DestSystemID {
-				summary.add(s.routeDangerSystems(hop.SystemID, hop.DestSystemID, minSec))
+				systems, timeout := s.routeDangerSystemsCached(hop.SystemID, hop.DestSystemID, minSec, deadline, segmentCache)
+				if timeout {
+					timedOut = true
+					break
+				}
+				summary.add(systems)
 			}
 			if hop.DestSystemID > 0 {
 				prevSystemID = hop.DestSystemID
 			}
 		}
+		if timedOut {
+			break
+		}
 		if targetSystemID > 0 && prevSystemID > 0 && targetSystemID != prevSystemID {
-			summary.add(s.routeDangerSystems(prevSystemID, targetSystemID, minSec))
+			systems, timeout := s.routeDangerSystemsCached(prevSystemID, targetSystemID, minSec, deadline, segmentCache)
+			if timeout {
+				timedOut = true
+				break
+			}
+			summary.add(systems)
 		}
 		summary.applyTo(&routes[i])
+		if progress != nil && (i+1)%20 == 0 && i+1 < limit {
+			progress(fmt.Sprintf("Scoring hauling gank risk: %d/%d routes...", i+1, limit))
+		}
+	}
+	if timedOut && progress != nil {
+		progress("Hauling gank risk scoring timed out; returning partial risk scores.")
 	}
 	return routes
+}
+
+func routeHaulingRiskLimit(count int) int {
+	if count <= 0 {
+		return 0
+	}
+	if count > maxRouteHaulingRiskEnrich {
+		return maxRouteHaulingRiskEnrich
+	}
+	return count
 }
 
 func (s *Server) systemIDByName(name string) int32 {
@@ -81,6 +130,54 @@ func (s *Server) routeDangerSystems(from, to int32, minSec float64) []gankcheck.
 		return nil
 	}
 	return systems
+}
+
+func (s *Server) routeDangerSystemsCached(
+	from int32,
+	to int32,
+	minSec float64,
+	deadline time.Time,
+	cache map[routeRiskSegmentKey][]gankcheck.SystemDanger,
+) ([]gankcheck.SystemDanger, bool) {
+	key := routeRiskSegmentKey{
+		from:       from,
+		to:         to,
+		minSecHash: int(math.Round(minSec * 100)),
+	}
+	if systems, ok := cache[key]; ok {
+		return systems, false
+	}
+	timeout := time.Until(deadline)
+	if timeout <= 0 {
+		return nil, true
+	}
+	if timeout > routeHaulingRiskLegBudget {
+		timeout = routeHaulingRiskLegBudget
+	}
+	systems, timedOut := s.routeDangerSystemsWithTimeout(from, to, minSec, timeout)
+	if timedOut {
+		return nil, true
+	}
+	cache[key] = systems
+	return systems, false
+}
+
+func (s *Server) routeDangerSystemsWithTimeout(from int32, to int32, minSec float64, timeout time.Duration) ([]gankcheck.SystemDanger, bool) {
+	if timeout <= 0 {
+		return nil, true
+	}
+	result := make(chan []gankcheck.SystemDanger, 1)
+	go func() {
+		result <- s.routeDangerSystems(from, to, minSec)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case systems := <-result:
+		return systems, false
+	case <-timer.C:
+		return nil, true
+	}
 }
 
 type routeHaulingRiskSummary struct {
