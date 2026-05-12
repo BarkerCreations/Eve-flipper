@@ -22,6 +22,7 @@ import (
 
 const (
 	stationAIWikiRAGRootDir              = "data/wiki-rag"
+	stationAIWikiRAGDisableEnv           = "EVE_FLIPPER_DISABLE_WIKI_RAG"
 	stationAIWikiRAGSyncInterval         = time.Hour
 	stationAIWikiTopK                    = 6
 	stationAIWikiMaxChunkTokens          = 800
@@ -95,6 +96,11 @@ func newStationAIWikiRAG() *stationAIWikiRAG {
 	r := &stationAIWikiRAG{}
 	r.cond = sync.NewCond(&r.mu)
 	return r
+}
+
+func stationAIWikiRAGAutoStartEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(stationAIWikiRAGDisableEnv)))
+	return v != "1" && v != "true" && v != "yes"
 }
 
 func (r *stationAIWikiRAG) Start(defaultRepo string) {

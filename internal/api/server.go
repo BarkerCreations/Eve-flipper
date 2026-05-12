@@ -651,7 +651,7 @@ func NewServer(cfg *config.Config, esiClient *esi.Client, database *db.DB, ssoCo
 		updateHTTP:         &http.Client{Timeout: 45 * time.Second},
 		updateSkipByUser:   make(map[string]string),
 	}
-	if s.wikiRAG != nil {
+	if s.wikiRAG != nil && stationAIWikiRAGAutoStartEnabled() {
 		s.wikiRAG.Start(defaultStationAIWikiRepo)
 	}
 	return s
