@@ -2,6 +2,7 @@
   "name": "eve-flipper-ui",
   "private": true,
   "version": "2.0.0",
+  "packageManager": "pnpm@11.1.2",
   "type": "module",
   "scripts": {
     "dev": "vite",

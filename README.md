@@ -143,14 +143,14 @@ http://127.0.0.1:13370
 Prerequisites:
 
 - Go `1.25+`
-- Node.js `20+`
-- npm
+- Node.js `24+`
+- pnpm `11+` through Corepack
 
 ```bash
 git clone https://github.com/ilyaux/Eve-flipper.git
 cd Eve-flipper
-npm -C frontend ci
-npm -C frontend run build
+corepack pnpm -C frontend install --frozen-lockfile
+corepack pnpm -C frontend run build
 go run .
 ```
 
@@ -165,21 +165,21 @@ go run .
 Frontend dev server:
 
 ```bash
-npm -C frontend ci
-npm -C frontend run dev
+corepack pnpm -C frontend install --frozen-lockfile
+corepack pnpm -C frontend run dev
 ```
 
 Production web build:
 
 ```bash
-npm -C frontend run build
+corepack pnpm -C frontend run build
 go build -o build/eve-flipper .
 ```
 
 Wails desktop build:
 
 ```bash
-npm -C frontend run build:wails
+corepack pnpm -C frontend run build:wails
 go build -tags "wails,production" -ldflags "-s -w -X main.version=dev" -o build/eve-flipper-desktop .
 ```
 
@@ -257,8 +257,8 @@ Useful scopes include market orders, wallet, assets, skills, blueprints, industr
 ```bash
 go test ./...
 go test -tags wails ./...
-npm -C frontend run build
-npm -C frontend run build:wails
+corepack pnpm -C frontend run build
+corepack pnpm -C frontend run build:wails
 ```
 
 ## Documentation and Community

@@ -19,17 +19,24 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Build frontend
         working-directory: frontend
         env:
           VITE_APP_VERSION: ${{ github.ref_name }}
         run: |
-          npm ci
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run build
 
       - name: Embed Windows version info
         run: |
@@ -158,9 +165,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install Linux desktop dependencies
         if: matrix.goos == 'linux'
@@ -173,8 +187,8 @@ jobs:
         env:
           VITE_APP_VERSION: ${{ github.ref_name }}
         run: |
-          npm ci
-          npm run build:wails
+          pnpm install --frozen-lockfile
+          pnpm run build:wails
 
       - name: Embed Windows version info
         if: matrix.goos == 'windows'

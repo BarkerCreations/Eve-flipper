@@ -27,11 +27,11 @@ test:
 
 ## frontend: install deps and build frontend
 frontend:
-	cd frontend && npm install && npm run build
+	cd frontend && corepack pnpm install --frozen-lockfile && corepack pnpm run build
 
 ## frontend-wails: install deps and build frontend for Wails (API routed through Wails asset server)
 frontend-wails:
-	cd frontend && npm install && npm run build:wails
+	cd frontend && corepack pnpm install --frozen-lockfile && corepack pnpm run build:wails
 
 ## wails: build Wails desktop variant (single-process UI + backend API)
 wails: frontend-wails

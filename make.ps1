@@ -50,8 +50,8 @@ function Build {
     Write-Host "Building frontend ($Version)..." -ForegroundColor Cyan
     Push-Location frontend
     $env:VITE_APP_VERSION = $Version
-    npm install --silent 2>$null
-    npm run build
+    corepack pnpm install --frozen-lockfile --silent 2>$null
+    corepack pnpm run build
     Remove-Item Env:VITE_APP_VERSION -ErrorAction SilentlyContinue
     Pop-Location
     if ($LASTEXITCODE -ne 0) { Write-Host "Frontend build failed!" -ForegroundColor Red; return }
@@ -76,8 +76,8 @@ function Frontend {
     Write-Host "Building frontend ($Version)..." -ForegroundColor Cyan
     Push-Location frontend
     $env:VITE_APP_VERSION = $Version
-    npm install
-    npm run build
+    corepack pnpm install --frozen-lockfile
+    corepack pnpm run build
     Remove-Item Env:VITE_APP_VERSION -ErrorAction SilentlyContinue
     Pop-Location
 }
@@ -88,8 +88,8 @@ function BuildWails {
     Write-Host "Building frontend for Wails ($Version)..." -ForegroundColor Cyan
     Push-Location frontend
     $env:VITE_APP_VERSION = $Version
-    npm install --silent 2>$null
-    npm run build:wails
+    corepack pnpm install --frozen-lockfile --silent 2>$null
+    corepack pnpm run build:wails
     $feExit = $LASTEXITCODE
     Remove-Item Env:VITE_APP_VERSION -ErrorAction SilentlyContinue
     Pop-Location
@@ -112,8 +112,8 @@ function Cross {
     Write-Host "Building frontend ($Version)..." -ForegroundColor Cyan
     Push-Location frontend
     $env:VITE_APP_VERSION = $Version
-    npm install
-    npm run build
+    corepack pnpm install --frozen-lockfile
+    corepack pnpm run build
     Remove-Item Env:VITE_APP_VERSION -ErrorAction SilentlyContinue
     Pop-Location
     if ($LASTEXITCODE -ne 0) { return }

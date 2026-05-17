@@ -16,7 +16,7 @@ Thanks for your interest in contributing! This project is maintained by **[@ilya
    ```
 4. Start the frontend:
    ```bash
-   cd frontend && npm install && npm run dev
+   cd frontend && corepack pnpm install && corepack pnpm run dev
    ```
 
 ## Development Workflow
