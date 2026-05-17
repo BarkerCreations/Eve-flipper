@@ -1,6 +1,11 @@
 package esi
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+)
 
 // CharacterPlanet is the ESI summary row for one character PI colony.
 type CharacterPlanet struct {
@@ -45,6 +50,53 @@ type PlanetaryRoute struct {
 	Quantity         int64 `json:"quantity"`
 	SourcePinID      int64 `json:"source_pin_id"`
 	DestinationPinID int64 `json:"destination_pin_id"`
+}
+
+// UnmarshalJSON accepts ESI's route quantity as either an integer JSON number
+// or an integer-valued decimal such as 20.0.
+func (r *PlanetaryRoute) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		RouteID          int64       `json:"route_id"`
+		ContentTypeID    int32       `json:"content_type_id"`
+		Quantity         json.Number `json:"quantity"`
+		SourcePinID      int64       `json:"source_pin_id"`
+		DestinationPinID int64       `json:"destination_pin_id"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	quantity, err := parsePlanetaryInt64(raw.Quantity)
+	if err != nil {
+		return fmt.Errorf("quantity: %w", err)
+	}
+	r.RouteID = raw.RouteID
+	r.ContentTypeID = raw.ContentTypeID
+	r.Quantity = quantity
+	r.SourcePinID = raw.SourcePinID
+	r.DestinationPinID = raw.DestinationPinID
+	return nil
+}
+
+func parsePlanetaryInt64(n json.Number) (int64, error) {
+	text := n.String()
+	if text == "" {
+		return 0, nil
+	}
+	if i, err := n.Int64(); err == nil {
+		return i, nil
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) || f > math.MaxInt64 || f < math.MinInt64 {
+		return 0, fmt.Errorf("out of int64 range: %s", text)
+	}
+	rounded := math.Round(f)
+	if math.Abs(f-rounded) > 1e-9 {
+		return 0, fmt.Errorf("not an integer quantity: %s", text)
+	}
+	return int64(rounded), nil
 }
 
 // CharacterPlanetDetail is the detailed PI colony layout.
