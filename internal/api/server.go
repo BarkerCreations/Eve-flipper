@@ -4972,36 +4972,46 @@ func (s *Server) handleAuthUndercuts(w http.ResponseWriter, r *http.Request) {
 		pairs[regionType{o.RegionID, o.TypeID}] = true
 	}
 
-	// Fetch regional orders for each unique type (concurrently, with semaphore).
-	// Limit concurrency to 10 to avoid ESI rate-limit issues.
-	type fetchResult struct {
+	// Group pairs by region and fetch one cached region book per region
+	// instead of one ESI call per (region, type) pair.
+	neededByRegion := make(map[int32]map[int32]bool)
+	for rt := range pairs {
+		if neededByRegion[rt.regionID] == nil {
+			neededByRegion[rt.regionID] = make(map[int32]bool)
+		}
+		neededByRegion[rt.regionID][rt.typeID] = true
+	}
+
+	type regionFetch struct {
 		orders []esi.MarketOrder
 		err    error
 	}
-	results := make(map[regionType]fetchResult)
+	regionResults := make(map[int32]regionFetch)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	undercutSem := make(chan struct{}, 10) // limit to 10 concurrent ESI requests
 
-	for pair := range pairs {
+	for rid := range neededByRegion {
 		wg.Add(1)
-		go func(rt regionType) {
+		go func(regionID int32) {
 			defer wg.Done()
-			undercutSem <- struct{}{}
-			ro, fetchErr := s.esi.FetchRegionOrdersByType(rt.regionID, rt.typeID)
-			<-undercutSem
+			all, err := s.esi.FetchRegionOrdersCached(regionID, "all")
 			mu.Lock()
-			results[rt] = fetchResult{ro, fetchErr}
+			regionResults[regionID] = regionFetch{all, err}
 			mu.Unlock()
-		}(pair)
+		}(rid)
 	}
 	wg.Wait()
 
-	// Flatten all regional orders into one slice.
 	var allRegional []esi.MarketOrder
-	for _, fr := range results {
-		if fr.err == nil {
-			allRegional = append(allRegional, fr.orders...)
+	for regionID, rf := range regionResults {
+		if rf.err != nil {
+			continue
+		}
+		needed := neededByRegion[regionID]
+		for _, o := range rf.orders {
+			if needed[o.TypeID] {
+				allRegional = append(allRegional, o)
+			}
 		}
 	}
 
@@ -6750,32 +6760,50 @@ func (s *Server) handleAuthOrderDesk(w http.ResponseWriter, r *http.Request) {
 		pairs[regionType{regionID: o.RegionID, typeID: o.TypeID}] = true
 	}
 
-	type fetchResult struct {
+	// Fetch one cached region book per unique region (not one ESI call per type).
+	// History is still fetched per (region, type) pair and runs concurrently.
+	neededByRegion := make(map[int32]map[int32]bool)
+	for rt := range pairs {
+		if neededByRegion[rt.regionID] == nil {
+			neededByRegion[rt.regionID] = make(map[int32]bool)
+		}
+		neededByRegion[rt.regionID][rt.typeID] = true
+	}
+
+	type regionFetch struct {
 		orders []esi.MarketOrder
 		err    error
 	}
-	books := make(map[regionType]fetchResult)
+	regionBooks := make(map[int32]regionFetch)
 	history := make(map[engine.OrderDeskHistoryKey][]esi.HistoryEntry)
 	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 10)
+	var booksWG, histWG sync.WaitGroup
 
+	for rid := range neededByRegion {
+		booksWG.Add(1)
+		go func(regionID int32) {
+			defer booksWG.Done()
+			all, err := s.esi.FetchRegionOrdersCached(regionID, "all")
+			mu.Lock()
+			regionBooks[regionID] = regionFetch{all, err}
+			mu.Unlock()
+		}(rid)
+	}
+
+	histSem := make(chan struct{}, 10)
 	for pair := range pairs {
-		wg.Add(1)
+		histWG.Add(1)
 		go func(rt regionType) {
-			defer wg.Done()
-
-			sem <- struct{}{}
-			ro, fetchErr := s.esi.FetchRegionOrdersByType(rt.regionID, rt.typeID)
-			<-sem
-
+			defer histWG.Done()
 			var entries []esi.HistoryEntry
 			var ok bool
 			if s.db != nil {
 				entries, ok = s.db.GetMarketHistory(rt.regionID, rt.typeID)
 			}
 			if !ok {
+				histSem <- struct{}{}
 				fresh, histErr := s.esi.FetchMarketHistory(rt.regionID, rt.typeID)
+				<-histSem
 				if histErr == nil {
 					entries = fresh
 					if s.db != nil && len(entries) > 0 {
@@ -6783,25 +6811,34 @@ func (s *Server) handleAuthOrderDesk(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-
-			mu.Lock()
-			books[rt] = fetchResult{orders: ro, err: fetchErr}
 			if len(entries) > 0 {
+				mu.Lock()
 				history[engine.NewOrderDeskHistoryKey(rt.regionID, rt.typeID)] = entries
+				mu.Unlock()
 			}
-			mu.Unlock()
 		}(pair)
 	}
-	wg.Wait()
+
+	booksWG.Wait()
+	histWG.Wait()
 
 	var allRegional []esi.MarketOrder
 	unavailableBooks := make(map[engine.OrderDeskHistoryKey]bool)
-	for rt, fr := range books {
-		if fr.err == nil {
-			allRegional = append(allRegional, fr.orders...)
+	for regionID, rf := range regionBooks {
+		if rf.err != nil {
+			for rt := range pairs {
+				if rt.regionID == regionID {
+					unavailableBooks[engine.NewOrderDeskHistoryKey(rt.regionID, rt.typeID)] = true
+				}
+			}
 			continue
 		}
-		unavailableBooks[engine.NewOrderDeskHistoryKey(rt.regionID, rt.typeID)] = true
+		needed := neededByRegion[regionID]
+		for _, o := range rf.orders {
+			if needed[o.TypeID] {
+				allRegional = append(allRegional, o)
+			}
+		}
 	}
 
 	result := engine.ComputeOrderDesk(orders, allRegional, history, unavailableBooks, engine.OrderDeskOptions{
@@ -7066,33 +7103,44 @@ func (s *Server) handleAuthStationCommand(w http.ResponseWriter, r *http.Request
 		pairs[regionType{regionID: o.RegionID, typeID: o.TypeID}] = true
 	}
 
-	type fetchResult struct {
+	neededByRegion := make(map[int32]map[int32]bool)
+	for rt := range pairs {
+		if neededByRegion[rt.regionID] == nil {
+			neededByRegion[rt.regionID] = make(map[int32]bool)
+		}
+		neededByRegion[rt.regionID][rt.typeID] = true
+	}
+
+	type regionFetch struct {
 		orders []esi.MarketOrder
 		err    error
 	}
-	bookByPair := make(map[regionType]fetchResult)
+	regionBooks := make(map[int32]regionFetch)
 	var booksMu sync.Mutex
 	var booksWG sync.WaitGroup
-	booksSem := make(chan struct{}, 10)
 
-	for pair := range pairs {
+	for rid := range neededByRegion {
 		booksWG.Add(1)
-		go func(rt regionType) {
+		go func(regionID int32) {
 			defer booksWG.Done()
-			booksSem <- struct{}{}
-			ro, fetchErr := s.esi.FetchRegionOrdersByType(rt.regionID, rt.typeID)
-			<-booksSem
+			all, err := s.esi.FetchRegionOrdersCached(regionID, "all")
 			booksMu.Lock()
-			bookByPair[rt] = fetchResult{orders: ro, err: fetchErr}
+			regionBooks[regionID] = regionFetch{all, err}
 			booksMu.Unlock()
-		}(pair)
+		}(rid)
 	}
 	booksWG.Wait()
 
 	var allRegional []esi.MarketOrder
-	for _, fr := range bookByPair {
-		if fr.err == nil {
-			allRegional = append(allRegional, fr.orders...)
+	for regionID, rf := range regionBooks {
+		if rf.err != nil {
+			continue
+		}
+		needed := neededByRegion[regionID]
+		for _, o := range rf.orders {
+			if needed[o.TypeID] {
+				allRegional = append(allRegional, o)
+			}
 		}
 	}
 
