@@ -370,7 +370,6 @@ func (d *DB) RecordMarketOrderSnapshot(snapshot esi.MarketOrderSnapshot) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	d.invalidateOrderBookStatsCache()
 	return nil
 }
 
