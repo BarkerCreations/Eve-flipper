@@ -816,6 +816,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/demand/refresh", s.handleDemandRefresh)
 	// PLEX+
 	mux.HandleFunc("GET /api/plex/dashboard", s.handlePLEXDashboard)
+	// Correlation / Market Signals
+	mux.HandleFunc("GET /api/correlation/suggestions", s.handleCorrelationSuggestions)
+	mux.HandleFunc("GET /api/correlation/pair", s.handleCorrelationPair)
 	// Corporation
 	mux.HandleFunc("GET /api/auth/roles", s.handleAuthRoles)
 	mux.HandleFunc("GET /api/corp/dashboard", s.handleCorpDashboard)

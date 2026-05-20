@@ -2,6 +2,13 @@ package sde
 
 import "testing"
 
+func TestIndustryData_RigSizes_NotNil(t *testing.T) {
+	ind := NewIndustryData()
+	if ind.RigSizes == nil {
+		t.Error("RigSizes should be initialised as empty map, not nil")
+	}
+}
+
 func TestIsRigGroupName(t *testing.T) {
 	tests := []struct {
 		name       string

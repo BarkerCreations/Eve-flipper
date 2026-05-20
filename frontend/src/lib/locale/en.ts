@@ -345,6 +345,7 @@ export const en = {
     
     // War Tracker / Demand
     tabDemand: "War Tracker",
+    tabSignals: "Signals",
     warTrackerTitle: "War Tracker",
     warTrackerDesc: "Monitor kill activity across EVE regions to find war profit opportunities",
     warZones: "War Zones",

@@ -12,6 +12,7 @@ export const MAIN_TAB_IDS = [
   "station",
   "industry",
   "demand",
+  "signals",
 ] as const;
 
 export type MainTabId = (typeof MAIN_TAB_IDS)[number];
@@ -257,6 +258,7 @@ export const MAIN_TAB_META: Record<MainTabId, { labelKey: TranslationKey; fallba
   station: { labelKey: "tabStation", fallback: "Station Trading", group: "tools" },
   industry: { labelKey: "tabIndustry", fallback: "Industry", group: "tools" },
   demand: { labelKey: "tabDemand", fallback: "War", group: "tools" },
+  signals: { labelKey: "tabSignals", fallback: "Signals", group: "tools" },
 };
 
 export const COCKPIT_QUICK_ACTIONS: CockpitQuickAction[] = [

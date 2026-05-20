@@ -80,6 +80,7 @@ type IndustryData struct {
 	Reprocessing       map[int32]*ReprocessingMaterial // oreTypeID -> yields
 	PlanetSchematics   map[int32]*PlanetSchematic      // schematicID -> PI schematic
 	BaseCategories     map[int32]bool                  // categoryIDs that are "base" materials (minerals, PI, etc.)
+	RigSizes           map[int32]int32                 // typeID → rig size (1=Small 2=Med 3=Large 4=Capital); from typeDogma attr 1544
 }
 
 // NewIndustryData creates a new IndustryData instance.
@@ -90,6 +91,7 @@ func NewIndustryData() *IndustryData {
 		Reprocessing:       make(map[int32]*ReprocessingMaterial),
 		PlanetSchematics:   make(map[int32]*PlanetSchematic),
 		BaseCategories:     make(map[int32]bool),
+		RigSizes:           make(map[int32]int32),
 	}
 }
 
@@ -107,6 +109,12 @@ func (d *Data) LoadIndustry(extractDir string) (*IndustryData, error) {
 
 	if err := ind.loadPlanetSchematics(extractDir); err != nil {
 		return nil, fmt.Errorf("load planet schematics: %w", err)
+	}
+
+	if err := ind.loadTypeDogmaRigSizes(extractDir); err != nil {
+		logger.Warn("SDE", "typeDogma rig sizes skipped: "+err.Error())
+	} else {
+		logger.Info("SDE", fmt.Sprintf("Loaded %d rig sizes", len(ind.RigSizes)))
 	}
 
 	return ind, nil
@@ -404,6 +412,31 @@ func (ind *IndustryData) loadPlanetSchematics(dir string) error {
 		logger.Info("SDE", fmt.Sprintf("Loaded %d PI schematics", count))
 	}
 	return nil
+}
+
+// loadTypeDogmaRigSizes reads rig size (dogma attribute 1544) from typeDogma.jsonl.
+// Non-fatal: if the file is missing or malformed, RigSizes stays empty.
+func (ind *IndustryData) loadTypeDogmaRigSizes(dir string) error {
+	const rigSizeAttrID = int32(1544)
+	return readJSONL(dir, "typeDogma", func(raw json.RawMessage) error {
+		var entry struct {
+			Key   int32 `json:"_key"`
+			Attrs []struct {
+				AttributeID int32   `json:"attributeID"`
+				Value       float64 `json:"value"`
+			} `json:"dogmaAttributes"`
+		}
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return nil // skip malformed lines
+		}
+		for _, a := range entry.Attrs {
+			if a.AttributeID == rigSizeAttrID && a.Value >= 1 && a.Value <= 4 {
+				ind.RigSizes[entry.Key] = int32(a.Value)
+				break
+			}
+		}
+		return nil
+	})
 }
 
 // GetBlueprintForProduct returns the blueprint that produces the given type.

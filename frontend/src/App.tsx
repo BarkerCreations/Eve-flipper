@@ -11,6 +11,7 @@ import { WatchlistTab } from "./components/WatchlistTab";
 import { StationTrading } from "./components/StationTrading";
 import { IndustryTab } from "./components/IndustryTab";
 import { WarTracker } from "./components/WarTracker";
+import { MarketSignalsTab } from "./components/market-signals/MarketSignalsTab";
 import { ItemIntelligenceModal } from "./components/ItemIntelligenceModal";
 import { TabActionBar, TabPanel, tabWorkspaceClass } from "./components/TabWorkspace";
 // import { MarketMakingTab } from "./components/MarketMakingTab";
@@ -2317,6 +2318,9 @@ function App() {
                 );
               }}
             />
+          </TabPanel>
+          <TabPanel active={tab === "signals"}>
+            <MarketSignalsTab />
           </TabPanel>
         </div>
       </div>
