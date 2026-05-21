@@ -58,6 +58,7 @@ type Config struct {
 	AlertTelegramToken  string `json:"alert_telegram_token"`
 	AlertTelegramChatID string `json:"alert_telegram_chat_id"`
 	AlertDiscordWebhook string `json:"alert_discord_webhook"`
+	AgentAPIKey         string `json:"agent_api_key"`
 	Opacity             int    `json:"opacity"`
 	WindowX             int    `json:"window_x"`
 	WindowY             int    `json:"window_y"`
