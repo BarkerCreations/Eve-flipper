@@ -1594,6 +1594,22 @@ func (d *DB) migrate() error {
 		logger.Info("DB", "Applied migration v37 (cockpit loadouts)")
 	}
 
+	if version < 38 {
+		_, err := d.sql.Exec(`
+			CREATE TABLE IF NOT EXISTS agent_cooldowns (
+				order_id         INTEGER NOT NULL,
+				type_id          INTEGER NOT NULL,
+				suppressed_until INTEGER NOT NULL,
+				PRIMARY KEY (order_id)
+			);
+			INSERT OR IGNORE INTO schema_version (version) VALUES (38);
+		`)
+		if err != nil {
+			return fmt.Errorf("migration v38: %w", err)
+		}
+		logger.Info("DB", "Applied migration v38 (agent cooldowns)")
+	}
+
 	return nil
 }
 

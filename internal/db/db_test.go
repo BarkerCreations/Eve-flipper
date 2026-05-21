@@ -965,3 +965,17 @@ func TestDB_MigrateV16_PreservesLegacyAlertHistory(t *testing.T) {
 		t.Fatalf("migrated alert_history message = %q, want %q", message, "legacy alert")
 	}
 }
+
+func TestDB_Migration_AgentCooldownsTableExists(t *testing.T) {
+	d := openTestDB(t)
+	defer d.Close()
+
+	rows, err := d.sql.Query("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_cooldowns'")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("agent_cooldowns table does not exist after migration")
+	}
+}
