@@ -654,6 +654,17 @@ func NewServer(cfg *config.Config, esiClient *esi.Client, database *db.DB, ssoCo
 	if s.wikiRAG != nil && stationAIWikiRAGAutoStartEnabled() {
 		s.wikiRAG.Start(defaultStationAIWikiRepo)
 	}
+	// Auto-generate agent API key on first run if not already set.
+	if cfg.AgentAPIKey == "" {
+		b := make([]byte, 24)
+		if _, err := rand.Read(b); err == nil {
+			cfg.AgentAPIKey = fmt.Sprintf("%x", b)
+			if database != nil {
+				_ = database.SaveConfig(cfg)
+			}
+			log.Printf("[agent] Generated new agent API key: %s", cfg.AgentAPIKey)
+		}
+	}
 	return s
 }
 
@@ -796,6 +807,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/ui/open-market", s.handleUIOpenMarket)
 	mux.HandleFunc("POST /api/ui/set-waypoint", s.handleUISetWaypoint)
 	mux.HandleFunc("POST /api/ui/open-contract", s.handleUIOpenContract)
+	// Agent trading API (X-Agent-Key auth)
+	mux.HandleFunc("GET /api/agent/queue", s.handleAgentQueue)
+	mux.HandleFunc("POST /api/agent/confirm", s.handleAgentConfirm)
+	mux.HandleFunc("GET /api/agent/state", s.handleAgentState)
 	// Contracts
 	mux.HandleFunc("GET /api/contracts/{contract_id}/items", s.handleGetContractItems)
 	// Item intelligence
