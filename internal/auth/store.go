@@ -129,6 +129,44 @@ func (s *SessionStore) Get() *Session {
 	return s.GetForUser(defaultUserID)
 }
 
+// GetAny returns the first active session across all users, or nil if none.
+// Used by the agent API which has no browser cookie context.
+func (s *SessionStore) GetAny() *Session {
+	_, sess := s.getAnyWithUserID()
+	return sess
+}
+
+// EnsureValidTokenAny returns a valid access token for any logged-in character.
+// Used by the agent API which has no browser cookie context.
+func (s *SessionStore) EnsureValidTokenAny(sso *SSOConfig) (string, error) {
+	userID, sess := s.getAnyWithUserID()
+	if sess == nil {
+		return "", fmt.Errorf("not logged in")
+	}
+	return s.ensureValidTokenForSession(userID, sess, sso)
+}
+
+func (s *SessionStore) getAnyWithUserID() (string, *Session) {
+	var userID string
+	var characterID int64
+	err := s.db.QueryRow(`
+		SELECT user_id, character_id FROM auth_session
+		WHERE is_active = 1
+		ORDER BY character_name ASC
+		LIMIT 1`).Scan(&userID, &characterID)
+	if err != nil {
+		err = s.db.QueryRow(`
+			SELECT user_id, character_id FROM auth_session
+			ORDER BY character_name ASC
+			LIMIT 1`).Scan(&userID, &characterID)
+	}
+	if err != nil {
+		return "", nil
+	}
+	sess := s.GetByCharacterIDForUser(userID, characterID)
+	return userID, sess
+}
+
 // GetForUser returns the active session for the given user, or nil if none.
 func (s *SessionStore) GetForUser(userID string) *Session {
 	userID = normalizeUserID(userID)

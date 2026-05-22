@@ -67,13 +67,12 @@ func (s *Server) handleAgentQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := userIDFromRequest(r)
-	sess := s.sessions.GetForUser(userID)
-	if sess == nil || sess.AccessToken == "" {
+	sess := s.sessions.GetAny()
+	if sess == nil {
 		writeError(w, http.StatusServiceUnavailable, "no authenticated session")
 		return
 	}
-	token, err := s.sessions.EnsureValidTokenForUserCharacter(s.sso, userID, sess.CharacterID)
+	token, err := s.sessions.EnsureValidTokenAny(s.sso)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "token refresh failed")
 		return
@@ -188,13 +187,12 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := userIDFromRequest(r)
-	sess := s.sessions.GetForUser(userID)
-	if sess == nil || sess.AccessToken == "" {
+	sess := s.sessions.GetAny()
+	if sess == nil {
 		writeError(w, http.StatusServiceUnavailable, "no authenticated session")
 		return
 	}
-	token, err := s.sessions.EnsureValidTokenForUserCharacter(s.sso, userID, sess.CharacterID)
+	token, err := s.sessions.EnsureValidTokenAny(s.sso)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "token refresh failed")
 		return
